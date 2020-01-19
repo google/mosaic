@@ -8,6 +8,7 @@ fn main() -> Result<(), SourceError> {
         .parser("examples/example.cc")
         .skip_function_bodies(true)
         .arguments(&[
+            "-std=c++17",
             "-isysroot",
             "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
         ])
@@ -108,7 +109,7 @@ impl<'cpp> Visitor<'cpp> {
 
     fn handle_method(&mut self, meth: Entity<'cpp>) {
         print_indent!(self, "{}", meth.display_name());
-        if let Some(ty) = meth.get_type() {
+        if let Some(ty) = meth.get_result_type() {
             print!(" -> {}", ty.display_name());
         }
         println!();

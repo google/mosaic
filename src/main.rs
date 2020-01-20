@@ -1,3 +1,7 @@
+#[macro_use]
+mod util;
+
+use crate::util::DisplayName;
 use clang::{self, Clang, Entity, EntityKind, Index, SourceError, Type};
 
 fn main() -> Result<(), SourceError> {
@@ -18,22 +22,6 @@ fn main() -> Result<(), SourceError> {
     visitor.visit_children(file.get_entity());
 
     Ok(())
-}
-
-const INDENT_SPACES: usize = 2;
-
-macro_rules! print_indent {
-    ($self: expr, $fmt:expr) => { print_indent!($self, $fmt,) };
-    ($self: expr, $fmt:expr, $($arg:expr),*) => {
-        print!(concat!("{:indent$}", $fmt), "", $($arg),*, indent=$self.indent * INDENT_SPACES)
-    };
-}
-
-macro_rules! println_indent {
-    ($self:expr, $fmt:expr) => { println_indent!($self, $fmt,) };
-    ($self:expr, $fmt:expr, $($arg:expr),*) => {
-        println!(concat!("{:indent$}", $fmt), "", $($arg),*, indent=$self.indent * INDENT_SPACES)
-    };
 }
 
 struct Visitor<'cpp> {
@@ -135,28 +123,5 @@ impl<'cpp> Visitor<'cpp> {
         let orig = std::mem::replace(&mut self.current_ty, ty);
         self.visit_children(ent);
         self.current_ty = orig;
-    }
-}
-
-trait DisplayName {
-    fn display_name(&self) -> String;
-    fn display_name_or(&self, alt: &'static str) -> String;
-}
-
-impl<'a> DisplayName for Entity<'a> {
-    fn display_name(&self) -> String {
-        self.display_name_or("(unnamed)")
-    }
-    fn display_name_or(&self, alt: &'static str) -> String {
-        self.get_display_name().unwrap_or_else(|| alt.to_string())
-    }
-}
-
-impl<'a> DisplayName for Type<'a> {
-    fn display_name(&self) -> String {
-        self.get_display_name()
-    }
-    fn display_name_or(&self, _alt: &'static str) -> String {
-        self.get_display_name()
     }
 }

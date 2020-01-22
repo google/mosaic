@@ -3,36 +3,71 @@ mod util;
 
 use crate::util::DisplayName;
 use clang::{self, Clang, Entity, EntityKind, Index, SourceError, Type};
+use std::collections::HashSet;
 
 fn main() -> Result<(), SourceError> {
     let clang = Clang::new().unwrap();
-    let index = Index::new(&clang, false, true);
-
-    let file = index
-        .parser("examples/example.cc")
-        .skip_function_bodies(true)
-        .arguments(&[
-            "-std=c++17",
-            "-isysroot",
-            "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
-        ])
-        .parse()?;
-
-    let mut visitor = Visitor::new();
-    visitor.visit_children(file.get_entity());
-
+    BindGen::new(&clang)
+        // TODO how do I remove this magic __1?
+        .add_item("::std::__1::vector")
+        .parse("examples/example.cc")?;
     Ok(())
 }
 
+struct BindGen<'cl> {
+    index: Index<'cl>,
+    items: HashSet<String>,
+}
+
+impl<'cl> BindGen<'cl> {
+    fn new(clang: &'cl Clang) -> Self {
+        let index = Index::new(&clang, false, true);
+        BindGen {
+            index,
+            items: HashSet::new(),
+        }
+    }
+
+    fn add_item(&mut self, item: &str) -> &mut Self {
+        self.items.insert(item.to_string());
+        self
+    }
+
+    fn parse(&mut self, filename: &str) -> Result<&mut Self, SourceError> {
+        {
+            let file = self
+                .index
+                .parser(filename)
+                .skip_function_bodies(true)
+                .arguments(&[
+                    "-std=c++17",
+                    "-isysroot",
+                    "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+                ])
+                .parse()?;
+            let mut visitor = Visitor::new(&self);
+            visitor.visit_children(file.get_entity());
+        }
+        Ok(self)
+    }
+
+    // Called by Visitor when we hit an entity in self.items.
+    fn lower(&self, ent: Entity<'cl>) {
+        println!("lowering {:?}", ent);
+    }
+}
+
 struct Visitor<'cpp> {
+    bindgen: &'cpp BindGen<'cpp>,
     namespace: String,
     current_ty: Option<Type<'cpp>>,
     indent: usize,
 }
 
 impl<'cpp> Visitor<'cpp> {
-    fn new() -> Visitor<'cpp> {
+    fn new(bindgen: &'cpp BindGen<'cpp>) -> Visitor<'cpp> {
         Visitor {
+            bindgen,
             namespace: String::new(),
             current_ty: None,
             indent: 0,
@@ -63,12 +98,15 @@ impl<'cpp> Visitor<'cpp> {
     }
 
     fn handle_struct(&mut self, st: Entity<'cpp>) {
-        let ty = st.get_type().unwrap();
         print_indent!(self, "struct {}::{}", self.namespace, st.display_name());
+        let ty = st.get_type().unwrap();
         match ty.get_sizeof() {
             Ok(size) => println!(" ({} bytes)", size),
             Err(e) => println!(" ({})", e),
         }
+
+        self.maybe_bindgen(st);
+
         self.indent += 1;
         self.visit_with_ty(Some(ty), st);
         self.indent -= 1;
@@ -101,6 +139,7 @@ impl<'cpp> Visitor<'cpp> {
             print!(" -> {}", ty.display_name());
         }
         println!();
+        self.maybe_bindgen(meth);
     }
 
     fn handle_typedef(&mut self, td: Entity<'cpp>) {
@@ -113,10 +152,28 @@ impl<'cpp> Visitor<'cpp> {
     }
 
     fn handle_class_template(&mut self, t: Entity<'cpp>) {
-        println_indent!(self, "template {}", t.display_name());
+        println_indent!(self, "template {}::{}", self.namespace, t.display_name());
+        let name = format!(
+            "{}::{}",
+            self.namespace,
+            t.get_name().unwrap_or("?".to_string())
+        );
+        println_indent!(self, "  => {}", name);
+
+        self.maybe_bindgen(t);
+
         self.indent += 1;
         self.visit_with_ty(None, t);
         self.indent -= 1;
+    }
+
+    fn maybe_bindgen(&self, ent: Entity<'cpp>) {
+        if let Some(name) = ent.get_name() {
+            let name = format!("{}::{}", self.namespace, name);
+            if self.bindgen.items.contains(&name) {
+                self.bindgen.lower(ent);
+            }
+        }
     }
 
     fn visit_with_ty(&mut self, ty: Option<Type<'cpp>>, ent: Entity<'cpp>) {

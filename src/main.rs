@@ -1,5 +1,6 @@
 #[macro_use]
 mod util;
+mod hir;
 
 use crate::util::DisplayName;
 use clang::{self, Clang, Entity, EntityKind, Index, SourceError, Type};
@@ -147,7 +148,7 @@ impl<'cpp> Visitor<'cpp> {
             self,
             "typedef {} = {}",
             td.display_name(),
-            td.get_type().unwrap().display_name()
+            td.get_typedef_underlying_type().unwrap().display_name()
         );
     }
 

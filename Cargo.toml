@@ -8,4 +8,5 @@ edition = "2018"
 
 [dependencies]
 clang = { version = "0.23.0", features = ["clang_8_0"] }
+thiserror = "1.0.9"
 #salsa = "0.14.1"

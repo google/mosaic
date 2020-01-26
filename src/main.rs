@@ -10,8 +10,7 @@ use std::collections::HashSet;
 fn main() -> Result<(), SourceError> {
     let clang = Clang::new().unwrap();
     BindGen::new(&clang)
-        // TODO how do I remove this magic __1?
-        .add_item("::std::__1::vector")
+        .add_item("::std::vector")
         .parse("examples/example.cc")?;
     Ok(())
 }

@@ -210,7 +210,13 @@ impl<'tu> Index<'tu> {
         self.node_mut(node).items = Some(HashMap::new());
         let num_entities = self.node(node).entities.len();
         for ent_idx in 0..num_entities {
-            self.populate_children(node, self.node(node).entities[ent_idx])?;
+            let ent = self.node(node).entities[ent_idx];
+
+            // TODO: Looking up children of unsupported entity types will result
+            // in confusing NotFound errors.
+            if should_expand(ent) {
+                self.populate_children(node, ent)?;
+            }
         }
         Ok(())
     }
@@ -223,6 +229,12 @@ impl<'tu> Index<'tu> {
             };
             let child_id = self.get_or_insert_child(parent, name);
             self.node_mut(child_id).entities.push(child);
+
+            if should_inline(child) {
+                //self.node_mut(parent).inline_items.push(child_id);
+                // Populate the parent with all of this node's children.
+                self.populate_children(parent, child);
+            }
         }
         Ok(())
     }
@@ -243,6 +255,23 @@ impl<'tu> Index<'tu> {
     #[inline(always)]
     fn next_node_id(&self) -> NodeId {
         NodeId(self.nodes.len() as u32)
+    }
+}
+
+fn should_expand(ent: Entity<'_>) -> bool {
+    use EntityKind::*;
+    match ent.get_kind() {
+        TranslationUnit => true,
+        Namespace | StructDecl | ClassDecl | ClassTemplate => true,
+        _ => false,
+    }
+}
+
+fn should_inline(ent: Entity<'_>) -> bool {
+    use EntityKind::*;
+    match ent.get_kind() {
+        Namespace | EnumDecl => !ent.is_scoped(),
+        _ => false,
     }
 }
 

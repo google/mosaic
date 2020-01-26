@@ -63,7 +63,7 @@ impl Display for Ident {
 /// A C++ fully-qualified name.
 ///
 /// Example: `std::vector`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) struct Path {
     components: Vec<Ident>,
 }
@@ -231,5 +231,29 @@ impl<'tu> Index<'tu> {
     #[inline(always)]
     fn next_node_id(&self) -> NodeId {
         NodeId(self.nodes.len() as u32)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn paths() {
+        assert_eq!(
+            Path::from("::std::stuff::basic_iterator"),
+            Path::from("std::stuff::basic_iterator")
+        );
+        assert_eq!(
+            Path::from("::std::vector<bool>::basic_iterator")
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            ["std", "vector<bool>", "basic_iterator"]
+                .into_iter()
+                .copied()
+                .map(Ident::from)
+                .collect::<Vec<_>>()
+        );
     }
 }

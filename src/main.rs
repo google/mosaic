@@ -2,8 +2,9 @@
 mod util;
 mod index;
 
+use crate::index::{Index, Path};
 use crate::util::DisplayName;
-use clang::{self, Clang, Entity, EntityKind, Index, SourceError, Type};
+use clang::{self, Clang, Entity, EntityKind, SourceError, Type};
 use std::collections::HashSet;
 
 fn main() -> Result<(), SourceError> {
@@ -16,13 +17,13 @@ fn main() -> Result<(), SourceError> {
 }
 
 struct BindGen<'cl> {
-    index: Index<'cl>,
+    index: clang::Index<'cl>,
     items: HashSet<String>,
 }
 
 impl<'cl> BindGen<'cl> {
     fn new(clang: &'cl Clang) -> Self {
-        let index = Index::new(&clang, false, true);
+        let index = clang::Index::new(&clang, false, true);
         BindGen {
             index,
             items: HashSet::new(),
@@ -48,6 +49,13 @@ impl<'cl> BindGen<'cl> {
                 .parse()?;
             let mut visitor = Visitor::new(&self);
             visitor.visit_children(file.get_entity());
+
+            let mut index = Index::new(&file);
+            println!();
+            println!("Requested items:");
+            for item in &self.items {
+                println!("  - {:?}", index.lookup(&Path::from(item.as_str())));
+            }
         }
         Ok(self)
     }

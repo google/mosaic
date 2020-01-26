@@ -4,7 +4,7 @@
 
 use clang::{self, Entity, EntityKind};
 use std::collections::{hash_map, HashMap};
-use std::fmt::{self, Display};
+use std::fmt::{self, Debug, Display};
 use std::iter::{FromIterator, IntoIterator};
 use thiserror::Error;
 
@@ -64,7 +64,7 @@ impl Display for Ident {
 /// A C++ fully-qualified name.
 ///
 /// Example: `std::vector`.
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 pub(crate) struct Path {
     components: Vec<Ident>,
 }
@@ -110,6 +110,11 @@ impl Display for Path {
             }
         }
         Ok(())
+    }
+}
+impl Debug for Path {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
@@ -210,13 +215,13 @@ impl<'tu> Index<'tu> {
         Ok(())
     }
 
-    fn populate_children(&mut self, node: NodeId, ent: Entity<'tu>) -> Result<()> {
+    fn populate_children(&mut self, parent: NodeId, ent: Entity<'tu>) -> Result<()> {
         for child in ent.get_children() {
-            let name = match ent.get_name() {
+            let name = match child.get_name() {
                 Some(name) => Ident::from(name),
                 None => continue,
             };
-            let child_id = self.get_or_insert_child(node, name);
+            let child_id = self.get_or_insert_child(parent, name);
             self.node_mut(child_id).entities.push(child);
         }
         Ok(())

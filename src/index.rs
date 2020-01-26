@@ -275,6 +275,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inline_namespace() {
+        let clang = clang::Clang::new().unwrap();
+        let index = clang::Index::new(&clang, true, true);
+        let file = cpp_parse!(&index, {
+            namespace std {
+                inline namespace __1 {
+                    struct vector {};
+                }
+                namespace notinline {
+                    struct foo {};
+                }
+            }
+        });
+        let mut index = Index::new(&file);
+        assert!(index.lookup(&Path::from("std::vector")).is_ok());
+        // FIXME: doesn't work :(
+        assert!(index.lookup(&Path::from("std::foo")).is_err());
+    }
+
+    #[test]
     fn paths() {
         assert_eq!(
             Path::from("::std::stuff::basic_iterator"),

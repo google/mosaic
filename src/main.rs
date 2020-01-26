@@ -1,10 +1,15 @@
+#[cfg(test)]
+#[macro_use]
+mod test_util;
+
 #[macro_use]
 mod util;
+
 mod index;
 
 use crate::index::{Index, Path};
 use crate::util::DisplayName;
-use clang::{self, Clang, Entity, EntityKind, SourceError, Type};
+use clang::{self, Clang, Entity, EntityKind, Parser, SourceError, Type};
 use std::collections::HashSet;
 
 fn main() -> Result<(), SourceError> {
@@ -13,6 +18,15 @@ fn main() -> Result<(), SourceError> {
         .add_item("::std::vector")
         .parse("examples/example.cc")?;
     Ok(())
+}
+
+pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
+    parser.skip_function_bodies(true).arguments(&[
+        "-std=c++17",
+        "-isysroot",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+    ]);
+    parser
 }
 
 struct BindGen<'cl> {
@@ -36,16 +50,7 @@ impl<'cl> BindGen<'cl> {
 
     fn parse(&mut self, filename: &str) -> Result<&mut Self, SourceError> {
         {
-            let file = self
-                .index
-                .parser(filename)
-                .skip_function_bodies(true)
-                .arguments(&[
-                    "-std=c++17",
-                    "-isysroot",
-                    "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
-                ])
-                .parse()?;
+            let file = configure(self.index.parser(filename)).parse()?;
             let mut visitor = Visitor::new(&self);
             visitor.visit_children(file.get_entity());
 

@@ -1,4 +1,4 @@
-//! An lazily populated index for looking up entities by name.
+//! A lazily populated index for looking up entities by name.
 
 #![allow(unused)]
 
@@ -7,6 +7,8 @@ use std::collections::{hash_map, HashMap};
 use std::fmt::{self, Display};
 use thiserror::Error;
 
+/// Represents errors which can occur while looking up entities in the index.
+#[non_exhaustive]
 #[derive(Error, Debug)]
 pub(crate) enum LookupError {
     #[error("couldn't find `{0}`")]
@@ -14,8 +16,11 @@ pub(crate) enum LookupError {
     #[error("{0}")]
     SourceError(clang::SourceError),
 }
+
+/// The result of a lookup operation.
 type Result<T> = std::result::Result<T, LookupError>;
 
+/// An ID assigned to a `Path` in the index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NodeId(u32);
 
@@ -30,11 +35,15 @@ impl NodeId {
     }
 }
 
+/// A C++ unqualified identifier.
+///
+/// Examples: `std`, `vector`, or `MyClass`.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) struct Ident {
     s: String,
 }
 impl From<&str> for Ident {
+    /// Creates an identifier. Can panic if the identifier is invalid.
     fn from(id: &str) -> Ident {
         assert!(!id.contains("::"), "invalid identifier `{}`", id);
         Ident { s: id.to_string() }
@@ -51,6 +60,9 @@ impl Display for Ident {
     }
 }
 
+/// A C++ fully-qualified name.
+///
+/// Example: `std::vector`.
 #[derive(Clone, Debug)]
 pub(crate) struct Path {
     components: Vec<Ident>,
@@ -93,26 +105,35 @@ impl Display for Path {
     }
 }
 
+/// An index `Node` is the entity or set of entities referred to by a `Path`.
+///
+/// For example, `std` and `std::vector` are both nodes.
+///
+/// Nodes may contain children, and they may be represented by multiple
+/// entities. Namespaces, for example, can have many AST entities associated
+/// with them. Template specializations are another example.
 #[derive(Debug, Default)]
-pub(crate) struct Entry<'tu> {
+pub(crate) struct Node<'tu> {
     //kind: EntityKind,
     entities: Vec<Entity<'tu>>,
     items: Option<HashMap<Ident, NodeId>>,
     inline_items: Vec<NodeId>,
 }
-impl<'tu> Entry<'tu> {
+impl<'tu> Node<'tu> {
     fn items_mut(&mut self) -> &mut HashMap<Ident, NodeId> {
         self.items.as_mut().unwrap()
     }
 }
 
+/// A lazily populated index for looking up `Node`s by name.
 pub(crate) struct Index<'tu> {
-    nodes: Vec<Entry<'tu>>,
+    nodes: Vec<Node<'tu>>,
 }
 impl<'tu> Index<'tu> {
+    /// Creates an index from the given TranslationUnit.
     pub(crate) fn new(file: &'tu clang::TranslationUnit<'_>) -> Index<'tu> {
         let entity = file.get_entity();
-        let file_node = Entry {
+        let file_node = Node {
             //kind: entity.get_kind(),
             entities: vec![entity],
             items: None,
@@ -124,23 +145,29 @@ impl<'tu> Index<'tu> {
     }
 
     #[inline(always)]
-    pub(crate) fn node(&self, id: NodeId) -> &Entry<'tu> {
+    pub(crate) fn node(&self, id: NodeId) -> &Node<'tu> {
         &self.nodes[id.0 as usize]
     }
 
     #[inline(always)]
-    fn node_mut(&mut self, id: NodeId) -> &mut Entry<'tu> {
+    fn node_mut(&mut self, id: NodeId) -> &mut Node<'tu> {
         &mut self.nodes[id.0 as usize]
     }
 
-    pub(crate) fn lookup(&mut self, path: &Path) -> Result<&Entry<'tu>> {
+    /// Returns the `Node` corresponding to the given `Path`.
+    ///
+    /// If the path does not exist, returns `LookupError::NotFound`.
+    pub(crate) fn lookup(&mut self, path: &Path) -> Result<&Node<'tu>> {
         self.lookup_id(&path).map(move |id| self.node(id))
     }
 
+    /// Returns the `NodeId` corresponding to the given `Path`.
+    ///
+    /// If the path does not exist, returns `LookupError::NotFound`.
     pub(crate) fn lookup_id(&mut self, path: &Path) -> Result<NodeId> {
         let mut cur = NodeId(0);
         for name in path.iter() {
-            cur = match self.child_of(cur, name) {
+            cur = match self.child_id_of(cur, name) {
                 Ok(child) => child,
                 // Fill in the path we failed to find.
                 Err(LookupError::NotFound(_)) => return Err(LookupError::NotFound(path.clone())),
@@ -150,7 +177,13 @@ impl<'tu> Index<'tu> {
         Ok(cur)
     }
 
-    pub(crate) fn child_of(&mut self, node: NodeId, child: &Ident) -> Result<NodeId> {
+    /// Returns the child named `child` of the given `node`.
+    pub(crate) fn child_of(&mut self, node: NodeId, child: &Ident) -> Result<&Node> {
+        self.child_id_of(node, child).map(move |id| self.node(id))
+    }
+
+    /// Returns the `NodeId` of the child named `child` of the given `node`.
+    pub(crate) fn child_id_of(&mut self, node: NodeId, child: &Ident) -> Result<NodeId> {
         if self.node(node).items.is_none() {
             self.expand(node);
         }

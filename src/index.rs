@@ -1,5 +1,4 @@
-//! "High-level IR", which right now is a unified index that resolves to
-//! clang::Entity.
+//! An lazily populated index for looking up entities by name.
 
 #![allow(unused)]
 
@@ -95,46 +94,46 @@ impl Display for Path {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct HirNode<'tu> {
+pub(crate) struct Entry<'tu> {
     //kind: EntityKind,
     entities: Vec<Entity<'tu>>,
     items: Option<HashMap<Ident, NodeId>>,
     inline_items: Vec<NodeId>,
 }
-impl<'tu> HirNode<'tu> {
+impl<'tu> Entry<'tu> {
     fn items_mut(&mut self) -> &mut HashMap<Ident, NodeId> {
         self.items.as_mut().unwrap()
     }
 }
 
-pub(crate) struct Hir<'tu> {
-    nodes: Vec<HirNode<'tu>>,
+pub(crate) struct Index<'tu> {
+    nodes: Vec<Entry<'tu>>,
 }
-impl<'tu> Hir<'tu> {
-    pub(crate) fn new(file: &'tu clang::TranslationUnit<'_>) -> Hir<'tu> {
+impl<'tu> Index<'tu> {
+    pub(crate) fn new(file: &'tu clang::TranslationUnit<'_>) -> Index<'tu> {
         let entity = file.get_entity();
-        let file_node = HirNode {
+        let file_node = Entry {
             //kind: entity.get_kind(),
             entities: vec![entity],
             items: None,
             inline_items: vec![],
         };
-        Hir {
+        Index {
             nodes: vec![file_node],
         }
     }
 
     #[inline(always)]
-    pub(crate) fn node(&self, id: NodeId) -> &HirNode<'tu> {
+    pub(crate) fn node(&self, id: NodeId) -> &Entry<'tu> {
         &self.nodes[id.0 as usize]
     }
 
     #[inline(always)]
-    fn node_mut(&mut self, id: NodeId) -> &mut HirNode<'tu> {
+    fn node_mut(&mut self, id: NodeId) -> &mut Entry<'tu> {
         &mut self.nodes[id.0 as usize]
     }
 
-    pub(crate) fn lookup(&mut self, path: &Path) -> Result<&HirNode<'tu>> {
+    pub(crate) fn lookup(&mut self, path: &Path) -> Result<&Entry<'tu>> {
         self.lookup_id(&path).map(move |id| self.node(id))
     }
 
@@ -172,7 +171,6 @@ impl<'tu> Hir<'tu> {
     }
 
     fn populate_children(&mut self, node: NodeId, ent: Entity<'tu>) -> Result<()> {
-        use hash_map::Entry;
         for child in ent.get_children() {
             let name = match ent.get_name() {
                 Some(name) => Ident::from(name),

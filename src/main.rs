@@ -1,6 +1,6 @@
 #[macro_use]
 mod util;
-mod hir;
+mod index;
 
 use crate::util::DisplayName;
 use clang::{self, Clang, Entity, EntityKind, Index, SourceError, Type};

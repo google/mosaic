@@ -5,6 +5,7 @@
 use clang::{self, Entity, EntityKind};
 use std::collections::{hash_map, HashMap};
 use std::fmt::{self, Display};
+use std::iter::{FromIterator, IntoIterator};
 use thiserror::Error;
 
 /// Represents errors which can occur while looking up entities in the index.
@@ -80,6 +81,13 @@ impl From<&str> for Path {
 impl From<String> for Path {
     fn from(path: String) -> Path {
         From::from(path.as_str())
+    }
+}
+impl FromIterator<Ident> for Path {
+    fn from_iter<T: IntoIterator<Item = Ident>>(iter: T) -> Path {
+        Path {
+            components: iter.into_iter().collect(),
+        }
     }
 }
 impl Path {
@@ -166,32 +174,31 @@ impl<'tu> Index<'tu> {
     /// If the path does not exist, returns `LookupError::NotFound`.
     pub(crate) fn lookup_id(&mut self, path: &Path) -> Result<NodeId> {
         let mut cur = NodeId(0);
-        for name in path.iter() {
-            cur = match self.child_id_of(cur, name) {
-                Ok(child) => child,
-                // Fill in the path we failed to find.
-                Err(LookupError::NotFound(_)) => return Err(LookupError::NotFound(path.clone())),
-                Err(e) => return Err(e),
-            }
+        for (idx, name) in path.iter().enumerate() {
+            cur = match self.child_id_of(cur, name)? {
+                Some(child) => child,
+                None => {
+                    let err_path = path.iter().take(idx + 1).cloned().collect::<Path>();
+                    return Err(LookupError::NotFound(err_path));
+                }
+            };
         }
         Ok(cur)
     }
 
     /// Returns the child named `child` of the given `node`.
-    pub(crate) fn child_of(&mut self, node: NodeId, child: &Ident) -> Result<&Node> {
-        self.child_id_of(node, child).map(move |id| self.node(id))
+    pub(crate) fn child_of(&mut self, node: NodeId, child: &Ident) -> Result<Option<&Node>> {
+        self.child_id_of(node, child)
+            .map(|opt| opt.map(move |id| self.node(id)))
     }
 
     /// Returns the `NodeId` of the child named `child` of the given `node`.
-    pub(crate) fn child_id_of(&mut self, node: NodeId, child: &Ident) -> Result<NodeId> {
+    pub(crate) fn child_id_of(&mut self, node: NodeId, child: &Ident) -> Result<Option<NodeId>> {
         if self.node(node).items.is_none() {
             self.expand(node);
         }
         let children = self.node(node).items.as_ref().unwrap();
-        match children.get(child) {
-            Some(id) => Ok(*id),
-            None => Err(LookupError::NotFound(Path::dummy())),
-        }
+        Ok(children.get(child).copied())
     }
 
     fn expand(&mut self, node: NodeId) -> Result<()> {

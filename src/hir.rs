@@ -4,7 +4,7 @@
 #![allow(unused)]
 
 use clang::{self, Entity, EntityKind};
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 use std::fmt::{self, Display};
 use thiserror::Error;
 
@@ -17,8 +17,19 @@ pub(crate) enum LookupError {
 }
 type Result<T> = std::result::Result<T, LookupError>;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NodeId(u32);
+
+impl NodeId {
+    #[inline(always)]
+    fn from_usize(n: usize) -> NodeId {
+        NodeId(n as u32)
+    }
+    #[inline(always)]
+    fn as_usize(&self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) struct Ident {
@@ -83,11 +94,17 @@ impl Display for Path {
     }
 }
 
+#[derive(Debug, Default)]
 pub(crate) struct HirNode<'tu> {
-    kind: EntityKind,
+    //kind: EntityKind,
     entities: Vec<Entity<'tu>>,
     items: Option<HashMap<Ident, NodeId>>,
     inline_items: Vec<NodeId>,
+}
+impl<'tu> HirNode<'tu> {
+    fn items_mut(&mut self) -> &mut HashMap<Ident, NodeId> {
+        self.items.as_mut().unwrap()
+    }
 }
 
 pub(crate) struct Hir<'tu> {
@@ -97,7 +114,7 @@ impl<'tu> Hir<'tu> {
     pub(crate) fn new(file: &'tu clang::TranslationUnit<'_>) -> Hir<'tu> {
         let entity = file.get_entity();
         let file_node = HirNode {
-            kind: entity.get_kind(),
+            //kind: entity.get_kind(),
             entities: vec![entity],
             items: None,
             inline_items: vec![],
@@ -107,10 +124,12 @@ impl<'tu> Hir<'tu> {
         }
     }
 
+    #[inline(always)]
     pub(crate) fn node(&self, id: NodeId) -> &HirNode<'tu> {
         &self.nodes[id.0 as usize]
     }
 
+    #[inline(always)]
     fn node_mut(&mut self, id: NodeId) -> &mut HirNode<'tu> {
         &mut self.nodes[id.0 as usize]
     }
@@ -147,12 +166,39 @@ impl<'tu> Hir<'tu> {
         self.node_mut(node).items = Some(HashMap::new());
         let num_entities = self.node(node).entities.len();
         for ent_idx in 0..num_entities {
-            self.lower(node, self.node(node).entities[ent_idx])?;
+            self.populate_children(node, self.node(node).entities[ent_idx])?;
         }
         Ok(())
     }
 
-    fn lower(&mut self, node: NodeId, ent: Entity<'tu>) -> Result<NodeId> {
-        todo!()
+    fn populate_children(&mut self, node: NodeId, ent: Entity<'tu>) -> Result<()> {
+        use hash_map::Entry;
+        for child in ent.get_children() {
+            let name = match ent.get_name() {
+                Some(name) => Ident::from(name),
+                None => continue,
+            };
+            let child_id = self.get_or_insert_child(node, name);
+            self.node_mut(child_id).entities.push(child);
+        }
+        Ok(())
+    }
+
+    fn get_or_insert_child(&mut self, parent: NodeId, child: Ident) -> NodeId {
+        let next_id = self.next_node_id();
+        let child_id = *self
+            .node_mut(parent)
+            .items_mut()
+            .entry(child)
+            .or_insert(next_id);
+        if child_id == next_id {
+            self.nodes.push(Default::default());
+        }
+        child_id
+    }
+
+    #[inline(always)]
+    fn next_node_id(&self) -> NodeId {
+        NodeId(self.nodes.len() as u32)
     }
 }

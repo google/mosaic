@@ -1,21 +1,17 @@
 //! A lazily populated index for looking up entities by name.
 
-#![allow(unused)]
-
 use clang::{self, Entity, EntityKind};
-use std::collections::{hash_map, HashMap};
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Display};
 use std::iter::{FromIterator, IntoIterator};
 use thiserror::Error;
 
 /// Represents errors which can occur while looking up entities in the index.
-#[non_exhaustive]
 #[derive(Error, Debug)]
-pub(crate) enum LookupError {
+#[non_exhaustive]
+pub enum LookupError {
     #[error("couldn't find `{0}`")]
     NotFound(Path),
-    #[error("{0}")]
-    SourceError(clang::SourceError),
 }
 
 /// The result of a lookup operation.
@@ -23,13 +19,14 @@ type Result<T> = std::result::Result<T, LookupError>;
 
 /// An ID assigned to a `Path` in the index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct NodeId(u32);
+pub struct NodeId(u32);
 
 impl NodeId {
     #[inline(always)]
     fn from_usize(n: usize) -> NodeId {
         NodeId(n as u32)
     }
+    #[allow(dead_code)]
     #[inline(always)]
     fn as_usize(&self) -> usize {
         self.0 as usize
@@ -40,7 +37,7 @@ impl NodeId {
 ///
 /// Examples: `std`, `vector`, or `MyClass`.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub(crate) struct Ident {
+pub struct Ident {
     s: String,
 }
 impl From<&str> for Ident {
@@ -65,7 +62,7 @@ impl Display for Ident {
 ///
 /// Example: `std::vector`.
 #[derive(Clone, Hash, Eq, PartialEq)]
-pub(crate) struct Path {
+pub struct Path {
     components: Vec<Ident>,
 }
 impl From<&str> for Path {
@@ -91,10 +88,7 @@ impl FromIterator<Ident> for Path {
     }
 }
 impl Path {
-    fn dummy() -> Path {
-        Path { components: vec![] }
-    }
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Ident> {
+    pub fn iter(&self) -> impl Iterator<Item = &Ident> {
         self.components.iter()
     }
 }
@@ -126,7 +120,7 @@ impl Debug for Path {
 /// entities. Namespaces, for example, can have many AST entities associated
 /// with them. Template specializations are another example.
 #[derive(Debug, Default)]
-pub(crate) struct Node<'tu> {
+pub struct Node<'tu> {
     //kind: EntityKind,
     entities: Vec<Entity<'tu>>,
     items: Option<HashMap<Ident, NodeId>>,
@@ -139,12 +133,12 @@ impl<'tu> Node<'tu> {
 }
 
 /// A lazily populated index for looking up `Node`s by name.
-pub(crate) struct Index<'tu> {
+pub struct Index<'tu> {
     nodes: Vec<Node<'tu>>,
 }
 impl<'tu> Index<'tu> {
     /// Creates an index from the given TranslationUnit.
-    pub(crate) fn new(file: &'tu clang::TranslationUnit<'_>) -> Index<'tu> {
+    pub fn new(file: &'tu clang::TranslationUnit<'_>) -> Index<'tu> {
         let entity = file.get_entity();
         let file_node = Node {
             //kind: entity.get_kind(),
@@ -158,7 +152,7 @@ impl<'tu> Index<'tu> {
     }
 
     #[inline(always)]
-    pub(crate) fn node(&self, id: NodeId) -> &Node<'tu> {
+    pub fn node(&self, id: NodeId) -> &Node<'tu> {
         &self.nodes[id.0 as usize]
     }
 
@@ -170,14 +164,14 @@ impl<'tu> Index<'tu> {
     /// Returns the `Node` corresponding to the given `Path`.
     ///
     /// If the path does not exist, returns `LookupError::NotFound`.
-    pub(crate) fn lookup(&mut self, path: &Path) -> Result<&Node<'tu>> {
+    pub fn lookup(&mut self, path: &Path) -> Result<&Node<'tu>> {
         self.lookup_id(&path).map(move |id| self.node(id))
     }
 
     /// Returns the `NodeId` corresponding to the given `Path`.
     ///
     /// If the path does not exist, returns `LookupError::NotFound`.
-    pub(crate) fn lookup_id(&mut self, path: &Path) -> Result<NodeId> {
+    pub fn lookup_id(&mut self, path: &Path) -> Result<NodeId> {
         let mut cur = NodeId(0);
         for (idx, name) in path.iter().enumerate() {
             cur = match self.child_id_of(cur, name)? {
@@ -192,15 +186,16 @@ impl<'tu> Index<'tu> {
     }
 
     /// Returns the child named `child` of the given `node`.
-    pub(crate) fn child_of(&mut self, node: NodeId, child: &Ident) -> Result<Option<&Node>> {
+    #[allow(dead_code)]
+    pub fn child_of(&mut self, node: NodeId, child: &Ident) -> Result<Option<&Node>> {
         self.child_id_of(node, child)
             .map(|opt| opt.map(move |id| self.node(id)))
     }
 
     /// Returns the `NodeId` of the child named `child` of the given `node`.
-    pub(crate) fn child_id_of(&mut self, node: NodeId, child: &Ident) -> Result<Option<NodeId>> {
+    pub fn child_id_of(&mut self, node: NodeId, child: &Ident) -> Result<Option<NodeId>> {
         if self.node(node).items.is_none() {
-            self.expand(node);
+            self.expand(node)?;
         }
         let children = self.node(node).items.as_ref().unwrap();
         Ok(children.get(child).copied())
@@ -233,7 +228,7 @@ impl<'tu> Index<'tu> {
             if should_inline(child) {
                 //self.node_mut(parent).inline_items.push(child_id);
                 // Populate the parent with all of this node's children.
-                self.populate_children(parent, child);
+                self.populate_children(parent, child)?;
             }
         }
         Ok(())
@@ -254,7 +249,7 @@ impl<'tu> Index<'tu> {
 
     #[inline(always)]
     fn next_node_id(&self) -> NodeId {
-        NodeId(self.nodes.len() as u32)
+        NodeId::from_usize(self.nodes.len())
     }
 }
 
@@ -276,7 +271,7 @@ fn should_inline(ent: Entity<'_>) -> bool {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

@@ -9,42 +9,23 @@ mod index;
 
 use crate::index::{Index, Path};
 use crate::util::DisplayName;
-use clang::{self, Clang, Entity, EntityKind, Parser, SourceError, Type, Unsaved};
+use clang::{self, Clang, Entity, EntityKind, Parser, SourceError, Type};
 use std::collections::HashSet;
 
 fn main() -> Result<(), SourceError> {
     let clang = Clang::new().unwrap();
     BindGen::new(&clang)
-        .add_item("example")
+        .add_item("::std::vector")
         .parse("examples/example.cc")?;
     Ok(())
 }
 
-pub(crate) fn configure(parser: Parser<'_>) -> Parser<'_> {
-    configure_include(parser, None)
-}
-
-pub(crate) fn configure_include<'a>(
-    mut parser: Parser<'a>,
-    include: Option<&'_ str>,
-) -> Parser<'a> {
-    let mut args = vec![
-        "-std=c++2a",
+pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
+    parser.skip_function_bodies(true).arguments(&[
+        "-std=c++17",
         "-isysroot",
         "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
-        "-fmodules-ts",
-        //"-fmodules",
-        //"-fbuiltin-module-map",
-        //"-fmodule-map-file=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include/c++/v1/module.modulemap",
-        //"-fimplicit-module-maps",
-        //"-fmodules-decluse",
-        //"-fmodule-name=foo",
-    ];
-    if let Some(include) = include {
-        args.push("-include-pch");
-        args.push(include);
-    }
-    parser.skip_function_bodies(true).arguments(&args);
+    ]);
     parser
 }
 
@@ -55,7 +36,7 @@ struct BindGen<'cl> {
 
 impl<'cl> BindGen<'cl> {
     fn new(clang: &'cl Clang) -> Self {
-        let index = clang::Index::new(&clang, true, true);
+        let index = clang::Index::new(&clang, false, true);
         BindGen {
             index,
             items: HashSet::new(),
@@ -73,20 +54,11 @@ impl<'cl> BindGen<'cl> {
             let mut visitor = Visitor::new(&self);
             visitor.visit_children(file.get_entity());
 
+            let mut index = Index::new(&file);
             println!();
             println!("Requested items:");
-            let mut index = Index::new(&file);
             for item in &self.items {
                 println!("  - {:?}", index.lookup(&Path::from(item.as_str())));
-            }
-
-            println!();
-            println!("Requested items redux:");
-            for item in &self.items {
-                println!(
-                    "  - {:?}",
-                    self.lookup(item.as_str(), /*filename*/ "examples/example.pch")
-                );
             }
         }
         Ok(self)
@@ -95,30 +67,6 @@ impl<'cl> BindGen<'cl> {
     // Called by Visitor when we hit an entity in self.items.
     fn lower(&self, ent: Entity<'cl>) {
         println!("lowering {:?}", ent);
-    }
-
-    fn lookup(&self, name: &str, include: &str) -> Option<Entity<'cl>> {
-        use clang::source::SourceRange;
-        let filename = std::path::Path::new("__lookup__.cc");
-        let mut parser = configure_include(self.index.parser(&filename), Some(include));
-        let unsaved = Unsaved::new(&filename, &format!("import {};", name));
-        let tu = parser.unsaved(&[unsaved]).parse().expect("blah");
-        let file = tu.get_file(&filename).unwrap();
-        let range = SourceRange::new(
-            file.get_offset_location(0),
-            file.get_offset_location(name.len() as u32),
-        );
-        //panic!("{:?}", tu.annotate(&range.tokenize()));
-        panic!(
-            "{:?}",
-            tu.get_entity()
-                .get_children()
-                .iter()
-                .next()
-                .unwrap()
-                .get_reference()
-                .unwrap()
-        );
     }
 }
 
@@ -150,7 +98,6 @@ impl<'cpp> Visitor<'cpp> {
                 Method => self.handle_method(ent),
                 TypedefDecl => self.handle_typedef(ent),
                 ClassTemplate => self.handle_class_template(ent),
-                ModuleImportDecl => panic!("module {:?}", ent),
                 _ => (),
             }
         }

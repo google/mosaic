@@ -31,6 +31,7 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
 enum Export<'tu> {
     Decl(Entity<'tu>),
     Type(Type<'tu>),
+    TemplateType(Entity<'tu>),
 }
 
 struct BindGen<'tu> {
@@ -62,12 +63,44 @@ impl<'tu> BindGen<'tu> {
                 Export::Decl(decl_ref) => {
                     for ent in decl_ref.get_overloaded_declarations().unwrap() {
                         println!("{} = {:?}", name, ent);
-                        println!("  {:?}", ent.get_template_arguments());
-                        println!("  {:?}", ent.get_template_kind());
+                        for child in ent.get_children() {
+                            println!("  {}: {:?}", child.display_name(), child.get_kind());
+                            if let EntityKind::TemplateTypeParameter = child.get_kind() {
+                                println!(
+                                    "    {:?}",
+                                    child.get_children().into_iter().collect::<Vec<_>>()
+                                );
+                            }
+                        }
                     }
                 }
                 Export::Type(ty) => {
                     println!("{} = {:?}", name, ty);
+                    println!(
+                        "  {:?}",
+                        ty.get_elaborated_type()
+                            .unwrap() // TODO hack
+                            .get_template_argument_types()
+                    );
+                }
+                Export::TemplateType(t) => {
+                    println!("{} = {:?}", name, t);
+                    for child in t.get_children() {
+                        match child.get_kind() {
+                            EntityKind::TemplateTypeParameter => {
+                                println!("  type parameter {}", child.get_name().unwrap())
+                            }
+                            EntityKind::TypeAliasDecl => println!(
+                                "  type alias => {:?} => {:?}",
+                                child.get_typedef_underlying_type().unwrap(),
+                                child
+                                    .get_typedef_underlying_type()
+                                    .unwrap()
+                                    .get_declaration(),
+                            ),
+                            _ => println!("  unknown child {:?}", child),
+                        }
+                    }
                 }
             }
         }
@@ -87,6 +120,9 @@ impl<'tu> BindGen<'tu> {
                     name,
                     Export::Type(decl.get_typedef_underlying_type().unwrap()),
                 )),
+                EntityKind::TypeAliasTemplateDecl => {
+                    exports.push((name, Export::TemplateType(decl)))
+                }
                 _ => panic!(
                     "Only using declarations are permitted inside rust_export:\n{}",
                     decl.get_pretty_printer().print()

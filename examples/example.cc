@@ -14,4 +14,7 @@ struct Example {
 namespace rust_export {
   using ::Example;
   using vector_int = std::vector<int>;
+  template<class T>
+  using vectorT = std::vector<T>;
+  using std::vector;
 }

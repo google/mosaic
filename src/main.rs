@@ -7,16 +7,15 @@ mod util;
 
 mod index;
 
-use crate::index::{Index, Path};
+use crate::index::Path;
 use crate::util::DisplayName;
-use clang::{self, Clang, Entity, EntityKind, Parser, SourceError, Type};
-use std::collections::HashSet;
+use clang::{self, Clang, Entity, EntityKind, Parser, SourceError, TranslationUnit, Type};
 
 fn main() -> Result<(), SourceError> {
     let clang = Clang::new().unwrap();
-    BindGen::new(&clang)
-        .add_item("::std::vector")
-        .parse("examples/example.cc")?;
+    let index = clang::Index::new(&clang, false, true);
+    let tu = configure(index.parser("examples/example.cc")).parse()?;
+    BindGen::new(tu).gen()?;
     Ok(())
 }
 
@@ -29,58 +28,85 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
     parser
 }
 
-struct BindGen<'cl> {
-    index: clang::Index<'cl>,
-    items: HashSet<String>,
+enum Export<'tu> {
+    Decl(Entity<'tu>),
+    Type(Type<'tu>),
 }
 
-impl<'cl> BindGen<'cl> {
-    fn new(clang: &'cl Clang) -> Self {
-        let index = clang::Index::new(&clang, false, true);
+struct BindGen<'tu> {
+    tu: TranslationUnit<'tu>,
+    //visible: Vec<(Path, Entity<'tu>)>,
+}
+
+impl<'tu> BindGen<'tu> {
+    fn new(tu: TranslationUnit<'tu>) -> Self {
         BindGen {
-            index,
-            items: HashSet::new(),
+            tu,
+            //visible: vec![],
         }
     }
 
-    fn add_item(&mut self, item: &str) -> &mut Self {
-        self.items.insert(item.to_string());
-        self
-    }
-
-    fn parse(&mut self, filename: &str) -> Result<&mut Self, SourceError> {
-        {
-            let file = configure(self.index.parser(filename)).parse()?;
-            let mut visitor = Visitor::new(&self);
-            visitor.visit_children(file.get_entity());
-
-            let mut index = Index::new(&file);
-            println!();
-            println!("Requested items:");
-            for item in &self.items {
-                println!("  - {:?}", index.lookup(&Path::from(item.as_str())));
+    fn gen(&mut self) -> Result<&mut Self, SourceError> {
+        //let mut visitor = Visitor::new(&self);
+        let mut exports = vec![];
+        for ent in self.tu.get_entity().get_children() {
+            if let EntityKind::Namespace = ent.get_kind() {
+                if let Some("rust_export") = ent.get_name().as_deref() {
+                    self.handle_rust_export(ent, &mut exports);
+                }
             }
         }
+
+        for (name, export) in exports {
+            match export {
+                Export::Decl(decl_ref) => {
+                    for ent in decl_ref.get_overloaded_declarations().unwrap() {
+                        println!("{} = {:?}", name, ent);
+                        println!("  {:?}", ent.get_template_arguments());
+                        println!("  {:?}", ent.get_template_kind());
+                    }
+                }
+                Export::Type(ty) => {
+                    println!("{} = {:?}", name, ty);
+                }
+            }
+        }
+
         Ok(self)
     }
 
-    // Called by Visitor when we hit an entity in self.items.
-    fn lower(&self, ent: Entity<'cl>) {
-        println!("lowering {:?}", ent);
+    fn handle_rust_export(&self, ns: Entity<'tu>, exports: &mut Vec<(Path, Export<'tu>)>) {
+        for decl in ns.get_children() {
+            println!("{:?}", decl);
+            let name = Path::from(decl.get_name().unwrap());
+            match decl.get_kind() {
+                EntityKind::UsingDeclaration => {
+                    exports.push((name, Export::Decl(decl.get_reference().unwrap())))
+                }
+                EntityKind::TypeAliasDecl => exports.push((
+                    name,
+                    Export::Type(decl.get_typedef_underlying_type().unwrap()),
+                )),
+                _ => panic!(
+                    "Only using declarations are permitted inside rust_export:\n{}",
+                    decl.get_pretty_printer().print()
+                ),
+            }
+        }
     }
 }
 
+#[allow(dead_code)]
 struct Visitor<'cpp> {
-    bindgen: &'cpp BindGen<'cpp>,
     namespace: String,
     current_ty: Option<Type<'cpp>>,
     indent: usize,
 }
 
+#[allow(dead_code)]
 impl<'cpp> Visitor<'cpp> {
-    fn new(bindgen: &'cpp BindGen<'cpp>) -> Visitor<'cpp> {
+    fn new() -> Visitor<'cpp> {
         Visitor {
-            bindgen,
             namespace: String::new(),
             current_ty: None,
             indent: 0,
@@ -118,8 +144,6 @@ impl<'cpp> Visitor<'cpp> {
             Err(e) => println!(" ({})", e),
         }
 
-        self.maybe_bindgen(st);
-
         self.indent += 1;
         self.visit_with_ty(Some(ty), st);
         self.indent -= 1;
@@ -152,7 +176,6 @@ impl<'cpp> Visitor<'cpp> {
             print!(" -> {}", ty.display_name());
         }
         println!();
-        self.maybe_bindgen(meth);
     }
 
     fn handle_typedef(&mut self, td: Entity<'cpp>) {
@@ -173,20 +196,9 @@ impl<'cpp> Visitor<'cpp> {
         );
         println_indent!(self, "  => {}", name);
 
-        self.maybe_bindgen(t);
-
         self.indent += 1;
         self.visit_with_ty(None, t);
         self.indent -= 1;
-    }
-
-    fn maybe_bindgen(&self, ent: Entity<'cpp>) {
-        if let Some(name) = ent.get_name() {
-            let name = format!("{}::{}", self.namespace, name);
-            if self.bindgen.items.contains(&name) {
-                self.bindgen.lower(ent);
-            }
-        }
     }
 
     fn visit_with_ty(&mut self, ty: Option<Type<'cpp>>, ent: Entity<'cpp>) {

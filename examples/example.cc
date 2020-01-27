@@ -10,3 +10,8 @@ struct Example {
   [[rust::name("foo_f64")]]
   void foo(double);
 };
+
+namespace rust_export {
+  using ::Example;
+  using vector_int = std::vector<int>;
+}

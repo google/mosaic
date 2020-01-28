@@ -9,12 +9,16 @@ mod index;
 
 use crate::index::Path;
 use crate::util::DisplayName;
-use clang::{self, Clang, Entity, EntityKind, Parser, SourceError, TranslationUnit, Type};
+use clang::{
+    self, Clang, Entity, EntityKind, Parser, SourceError, TranslationUnit, Type, TypeKind,
+};
+use std::env;
 
 fn main() -> Result<(), SourceError> {
     let clang = Clang::new().unwrap();
     let index = clang::Index::new(&clang, false, true);
-    let tu = configure(index.parser("examples/example.cc")).parse()?;
+    let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
+    let tu = configure(index.parser(filename)).parse()?;
     BindGen::new(tu).gen()?;
     Ok(())
 }
@@ -60,20 +64,7 @@ impl<'tu> BindGen<'tu> {
 
         for (name, export) in exports {
             match export {
-                Export::Decl(decl_ref) => {
-                    for ent in decl_ref.get_overloaded_declarations().unwrap() {
-                        println!("{} = {:?}", name, ent);
-                        for child in ent.get_children() {
-                            println!("  {}: {:?}", child.display_name(), child.get_kind());
-                            if let EntityKind::TemplateTypeParameter = child.get_kind() {
-                                println!(
-                                    "    {:?}",
-                                    child.get_children().into_iter().collect::<Vec<_>>()
-                                );
-                            }
-                        }
-                    }
-                }
+                Export::Decl(decl_ref) => self.lower_decl(&name, decl_ref),
                 Export::Type(ty) => {
                     println!("{} = {:?}", name, ty);
                     println!(
@@ -129,6 +120,72 @@ impl<'tu> BindGen<'tu> {
                 ),
             }
         }
+    }
+
+    fn lower_decl(&self, name: &Path, decl_ref: Entity<'tu>) {
+        let overloads = decl_ref.get_overloaded_declarations().unwrap();
+        assert_eq!(overloads.len(), 1);
+        let ent = overloads[0];
+
+        println!("{} = {:?}", name, ent);
+        for child in ent.get_children() {
+            println!("  {}: {:?}", child.display_name(), child.get_kind());
+        }
+
+        match ent.get_kind() {
+            EntityKind::StructDecl => self.lower_struct(name, ent),
+            other => eprintln!("{}: Unsupported type {:?}", name, other),
+        }
+    }
+
+    fn lower_struct(&self, name: &Path, ent: Entity<'tu>) {
+        let ty = ent.get_type().unwrap();
+        if !ty.is_pod() {
+            // TODO: Proper error handling
+            eprintln!("{}: Only POD structs are supported", name);
+            return;
+        }
+
+        // TODO: Make not silly =)
+        println!("#[repr(C)]");
+        println!("struct {} {{", name);
+        for field in ty.get_fields().unwrap() {
+            let field_name = field.get_name().unwrap();
+            print!("  {}: ", field_name);
+            let field_ty = field.get_type().unwrap();
+            let field_size = field_ty.get_sizeof().unwrap();
+            match field_ty.get_kind() {
+                TypeKind::Int => {
+                    assert_eq!(4, field_size);
+                    print!("i32");
+                }
+                TypeKind::UInt => {
+                    assert_eq!(4, field_size);
+                    print!("u32");
+                }
+                TypeKind::CharS | TypeKind::SChar => {
+                    assert_eq!(1, field_size);
+                    print!("i8");
+                }
+                TypeKind::CharU | TypeKind::UChar => {
+                    assert_eq!(1, field_size);
+                    print!("u8");
+                }
+                TypeKind::Float => {
+                    assert_eq!(4, field_size);
+                    print!("f32");
+                }
+                TypeKind::Double => {
+                    assert_eq!(8, field_size);
+                    print!("f64");
+                }
+                other => {
+                    panic!("{}::{}: Unsupported type {:?}", name, field_name, other);
+                }
+            }
+            println!(",");
+        }
+        println!("}}");
     }
 }
 

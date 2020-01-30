@@ -1,4 +1,5 @@
 //! A lazily populated index for looking up entities by name.
+#![allow(dead_code)]
 
 use clang::{self, Entity, EntityKind};
 use std::collections::HashMap;

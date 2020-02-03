@@ -5,6 +5,7 @@ mod test_util;
 #[macro_use]
 mod util;
 
+mod codegen;
 mod index;
 mod ir;
 
@@ -66,9 +67,10 @@ impl<'tu> BindGen<'tu> {
             }
         }
 
+        let mut mdl = ir::Module::new();
         for (name, export) in exports {
             match export {
-                Export::Decl(decl_ref) => self.lower_decl(name, decl_ref),
+                Export::Decl(decl_ref) => self.lower_decl(name, decl_ref, &mut mdl),
                 Export::Type(ty) => {
                     println!("{} = {:?}", name, ty);
                     println!(
@@ -100,6 +102,9 @@ impl<'tu> BindGen<'tu> {
             }
         }
 
+        mdl.check();
+        codegen::perform_codegen(&mdl);
+
         Ok(self)
     }
 
@@ -126,7 +131,7 @@ impl<'tu> BindGen<'tu> {
         }
     }
 
-    fn lower_decl(&self, name: Path, decl_ref: Entity<'tu>) {
+    fn lower_decl(&self, name: Path, decl_ref: Entity<'tu>, mdl: &mut ir::Module) {
         let overloads = decl_ref.get_overloaded_declarations().unwrap();
         assert_eq!(overloads.len(), 1);
         let ent = overloads[0];
@@ -137,12 +142,12 @@ impl<'tu> BindGen<'tu> {
         }
 
         match ent.get_kind() {
-            EntityKind::StructDecl => self.lower_struct(name, ent),
+            EntityKind::StructDecl => self.lower_struct(name, ent, mdl),
             other => eprintln!("{}: Unsupported type {:?}", name, other),
         }
     }
 
-    fn lower_struct(&self, name: Path, ent: Entity<'tu>) {
+    fn lower_struct(&self, name: Path, ent: Entity<'tu>, mdl: &mut ir::Module) {
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
             // TODO: Proper error handling
@@ -167,58 +172,20 @@ impl<'tu> BindGen<'tu> {
                 ty: field_ty.lower(),
             });
             let offset = field.get_offset_of_field().unwrap().try_into().unwrap();
-            offsets.push(ir::Offset::new(offset).unwrap());
+            offsets.push(offset);
         }
+        let size = ty.get_alignof().unwrap().try_into().unwrap();
         let align = ty.get_alignof().unwrap().try_into().unwrap();
 
-        let _lowered = ir::Struct {
+        let lowered = ir::Struct {
             name: name.clone(),
             fields,
             offsets,
             repr: ir::Repr::C,
+            size: ir::Size::new(size).unwrap(),
             align: ir::Align::new(align).unwrap(),
         };
-
-        // TODO: Make not silly =)
-        println!("#[repr(C)]");
-        println!("struct {} {{", name);
-        for field in ty.get_fields().unwrap() {
-            let field_name = field.get_name().unwrap();
-            print!("  {}: ", field_name);
-            let field_ty = field.get_type().unwrap();
-            let field_size = field_ty.get_sizeof().unwrap();
-            match field_ty.get_kind() {
-                TypeKind::Int => {
-                    assert_eq!(4, field_size);
-                    print!("i32");
-                }
-                TypeKind::UInt => {
-                    assert_eq!(4, field_size);
-                    print!("u32");
-                }
-                TypeKind::CharS | TypeKind::SChar => {
-                    assert_eq!(1, field_size);
-                    print!("i8");
-                }
-                TypeKind::CharU | TypeKind::UChar => {
-                    assert_eq!(1, field_size);
-                    print!("u8");
-                }
-                TypeKind::Float => {
-                    assert_eq!(4, field_size);
-                    print!("f32");
-                }
-                TypeKind::Double => {
-                    assert_eq!(8, field_size);
-                    print!("f64");
-                }
-                other => {
-                    panic!("{}::{}: Unsupported type {:?}", name, field_name, other);
-                }
-            }
-            println!(",");
-        }
-        println!("}}");
+        mdl.structs.push(lowered);
     }
 }
 

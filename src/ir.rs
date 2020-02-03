@@ -7,6 +7,16 @@
 use crate::index::{Ident, Path};
 use std::num::NonZeroU16;
 
+#[derive(Debug)]
+pub struct Module {
+    pub structs: Vec<Struct>,
+}
+impl Module {
+    pub fn new() -> Module {
+        Module { structs: vec![] }
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum Ty {
     Short,
@@ -63,6 +73,7 @@ pub struct Struct {
     pub fields: Vec<Field>,
     pub offsets: Vec<Offset>,
     pub repr: Repr,
+    pub size: Size,
     pub align: Align,
 }
 
@@ -72,11 +83,26 @@ pub struct Field {
     pub ty: Ty,
 }
 
-pub type Offset = NonZeroU16;
+pub type Offset = u16;
+pub type Size = NonZeroU16;
 pub type Align = NonZeroU16;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Repr {
     C,
     Opaque,
+}
+
+impl Module {
+    pub fn check(&self) {
+        for st in &self.structs {
+            st.check();
+        }
+    }
+}
+
+impl Struct {
+    fn check(&self) {
+        // TODO
+    }
 }

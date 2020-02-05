@@ -6,6 +6,7 @@ mod test_util;
 mod util;
 
 mod codegen;
+mod diagnostics;
 mod index;
 mod ir;
 
@@ -24,7 +25,7 @@ fn main() -> Result<(), SourceError> {
     let index = clang::Index::new(&clang, false, true);
     let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
     let tu = configure(index.parser(filename)).parse()?;
-    BindGen::new(tu).gen()?;
+    LowerCtx::new(tu).gen()?;
     Ok(())
 }
 
@@ -43,14 +44,18 @@ enum Export<'tu> {
     TemplateType(Entity<'tu>),
 }
 
-struct BindGen<'tu> {
+struct Session {
+    // TODO: opts, errs
+}
+
+struct LowerCtx<'tu> {
     tu: TranslationUnit<'tu>,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
-impl<'tu> BindGen<'tu> {
+impl<'tu> LowerCtx<'tu> {
     fn new(tu: TranslationUnit<'tu>) -> Self {
-        BindGen {
+        LowerCtx {
             tu,
             //visible: vec![],
         }

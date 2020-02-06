@@ -69,6 +69,7 @@ dependencies = [
  "clang 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "codespan 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "codespan-reporting 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "termcolor 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 1.0.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

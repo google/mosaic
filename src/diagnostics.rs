@@ -7,7 +7,9 @@
 
 use codespan::{self, Files};
 use codespan_reporting::diagnostic as imp;
+use codespan_reporting::term;
 use std::{cell::RefCell, collections::HashMap, fmt::Debug, hash::Hash, rc::Rc};
+use termcolor::{self, ColorChoice};
 
 pub use codespan::FileId;
 
@@ -39,6 +41,7 @@ pub struct DiagnosticsCtx<S: AsRef<str>>(Rc<RefCell<CtxInner<S>>>);
 struct CtxInner<Source: AsRef<str>> {
     files: Files<Source>,
     counts: Counts,
+    writer: termcolor::StandardStream,
 }
 
 type Count = u32;
@@ -56,33 +59,34 @@ impl<S: AsRef<str>> DiagnosticsCtx<S> {
         let inner = CtxInner {
             files: Files::new(),
             counts: Counts::default(),
+            writer: termcolor::StandardStream::stderr(ColorChoice::Auto),
         };
         DiagnosticsCtx(Rc::new(RefCell::new(inner)))
     }
 
-    pub fn bug(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic {
+    pub fn bug(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic<'_, S> {
         self.0.borrow_mut().counts.bugs += 1;
-        Diagnostic(imp::Diagnostic::new_bug(message, primary_label.0))
+        Diagnostic::new(imp::Diagnostic::new_bug(message, primary_label.0), self)
     }
 
-    pub fn error(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic {
+    pub fn error(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic<'_, S> {
         self.0.borrow_mut().counts.errors += 1;
-        Diagnostic(imp::Diagnostic::new_error(message, primary_label.0))
+        Diagnostic::new(imp::Diagnostic::new_error(message, primary_label.0), self)
     }
 
-    pub fn warn(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic {
+    pub fn warn(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic<'_, S> {
         self.0.borrow_mut().counts.warns += 1;
-        Diagnostic(imp::Diagnostic::new_warning(message, primary_label.0))
+        Diagnostic::new(imp::Diagnostic::new_warning(message, primary_label.0), self)
     }
 
-    pub fn info(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic {
+    pub fn info(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic<'_, S> {
         self.0.borrow_mut().counts.infos += 1;
-        Diagnostic(imp::Diagnostic::new_note(message, primary_label.0))
+        Diagnostic::new(imp::Diagnostic::new_note(message, primary_label.0), self)
     }
 
-    pub fn help(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic {
+    pub fn help(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic<'_, S> {
         self.0.borrow_mut().counts.helps += 1;
-        Diagnostic(imp::Diagnostic::new_help(message, primary_label.0))
+        Diagnostic::new(imp::Diagnostic::new_help(message, primary_label.0), self)
     }
 
     pub fn has_bugs(&self) -> bool {
@@ -100,30 +104,46 @@ impl<S: AsRef<str>> DiagnosticsCtx<S> {
 }
 
 #[must_use]
-pub struct Diagnostic(imp::Diagnostic);
+pub struct Diagnostic<'ctx, S: AsRef<str>> {
+    diag: imp::Diagnostic,
+    ctx: &'ctx DiagnosticsCtx<S>,
+}
 
-impl Diagnostic {
+impl<'ctx, S: AsRef<str>> Diagnostic<'ctx, S> {
+    fn new(diag: imp::Diagnostic, ctx: &'ctx DiagnosticsCtx<S>) -> Self {
+        Diagnostic { diag, ctx }
+    }
+
     pub fn emit(self) {
-        todo!()
+        let CtxInner {
+            ref mut writer,
+            ref files,
+            ..
+        } = &mut *self.ctx.0.borrow_mut();
+        term::emit(writer, &Default::default(), files, &self.diag)
+            .expect("failed to emit diagnostic");
     }
 
     pub fn with_note(mut self, note: impl Into<String>) -> Self {
-        self.0.notes.push(note.into());
+        self.diag.notes.push(note.into());
         self
     }
 
-    pub fn with_notes(mut self, notes: impl IntoIterator<Item = String>) -> Diagnostic {
-        self.0.notes.extend(notes);
+    pub fn with_notes(mut self, notes: impl IntoIterator<Item = String>) -> Diagnostic<'ctx, S> {
+        self.diag.notes.extend(notes);
         self
     }
 
-    pub fn with_label(mut self, secondary_label: Label) -> Diagnostic {
-        self.0.secondary_labels.push(secondary_label.0);
+    pub fn with_label(mut self, secondary_label: Label) -> Diagnostic<'ctx, S> {
+        self.diag.secondary_labels.push(secondary_label.0);
         self
     }
 
-    pub fn with_labels(mut self, seconadry_labels: impl IntoIterator<Item = Label>) -> Diagnostic {
-        self.0
+    pub fn with_labels(
+        mut self,
+        seconadry_labels: impl IntoIterator<Item = Label>,
+    ) -> Diagnostic<'ctx, S> {
+        self.diag
             .secondary_labels
             .extend(seconadry_labels.into_iter().map(|l| l.0));
         self

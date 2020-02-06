@@ -10,22 +10,26 @@ mod diagnostics;
 mod index;
 mod ir;
 
+use crate::diagnostics::{DiagnosticsCtx, SourceFileMap, Span};
 use crate::index::{Ident, Path};
 use crate::ir::*;
 use crate::util::DisplayName;
 use clang::{
-    self, Accessibility, Clang, Entity, EntityKind, Parser, SourceError, TranslationUnit, Type,
-    TypeKind,
+    self,
+    source::{File, SourceRange},
+    Accessibility, Clang, Entity, EntityKind, Parser, SourceError, TranslationUnit, Type, TypeKind,
 };
+use std::cell::RefCell;
 use std::convert::TryInto;
 use std::env;
 
 fn main() -> Result<(), SourceError> {
+    let sess = Session::new();
     let clang = Clang::new().unwrap();
     let index = clang::Index::new(&clang, false, true);
     let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
     let tu = configure(index.parser(filename)).parse()?;
-    LowerCtx::new(tu).gen()?;
+    LowerCtx::new(&sess, &tu).gen()?;
     Ok(())
 }
 
@@ -45,23 +49,50 @@ enum Export<'tu> {
 }
 
 struct Session {
-    // TODO: opts, errs
+    // TODO: opts
+    diags: DiagnosticsCtx<String>,
+}
+
+impl Session {
+    fn new() -> Self {
+        Session {
+            diags: DiagnosticsCtx::new(),
+        }
+    }
+}
+
+impl<'tu> diagnostics::File<String> for File<'tu> {
+    fn name(&self) -> String {
+        self.get_path()
+            .as_path()
+            .to_str()
+            .expect("path was not valid UTF-8")
+            .into()
+    }
+
+    fn contents(&self) -> String {
+        self.get_contents().unwrap()
+    }
 }
 
 struct LowerCtx<'tu> {
-    tu: TranslationUnit<'tu>,
+    sess: &'tu Session,
+    tu: &'tu TranslationUnit<'tu>,
+    source_map: RefCell<SourceFileMap<File<'tu>, String>>,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
 impl<'tu> LowerCtx<'tu> {
-    fn new(tu: TranslationUnit<'tu>) -> Self {
+    fn new(sess: &'tu Session, tu: &'tu TranslationUnit<'tu>) -> Self {
         LowerCtx {
+            sess,
             tu,
+            source_map: RefCell::new(SourceFileMap::<File<'tu>, String>::new(&sess.diags)),
             //visible: vec![],
         }
     }
 
-    fn gen(&mut self) -> Result<&mut Self, SourceError> {
+    fn gen(&mut self) -> Result<(), SourceError> {
         //let mut visitor = AstVisitor::new(&self);
         let mut exports = vec![];
         for ent in self.tu.get_entity().get_children() {
@@ -110,7 +141,7 @@ impl<'tu> LowerCtx<'tu> {
         mdl.check();
         codegen::perform_codegen(&mdl);
 
-        Ok(self)
+        Ok(())
     }
 
     fn handle_rust_export(&self, ns: Entity<'tu>, exports: &mut Vec<(Path, Export<'tu>)>) {
@@ -155,8 +186,13 @@ impl<'tu> LowerCtx<'tu> {
     fn lower_struct(&self, name: Path, ent: Entity<'tu>, mdl: &mut ir::Module) {
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
-            // TODO: Proper error handling
-            eprintln!("{}: Only POD structs are supported", name);
+            self.sess
+                .diags
+                .error(
+                    "unsupported type",
+                    self.span(ent).label("only POD structs are supported"),
+                )
+                .emit();
             return;
         }
 
@@ -191,6 +227,28 @@ impl<'tu> LowerCtx<'tu> {
             align: ir::Align::new(align).unwrap(),
         };
         mdl.structs.push(lowered);
+    }
+
+    fn span(&self, ent: Entity<'tu>) -> Span {
+        self.maybe_span_from_range(ent.get_range())
+            .expect("TODO dummy span")
+    }
+
+    fn maybe_span_from_range(&self, range: Option<SourceRange<'tu>>) -> Option<Span> {
+        let range = match range {
+            Some(range) => range,
+            None => return None,
+        };
+        let (start, end) = (
+            range.get_start().get_file_location(),
+            range.get_end().get_file_location(),
+        );
+        let file = match (start.file, end.file) {
+            (Some(f), Some(g)) if f == g => f,
+            _ => return None,
+        };
+        let file_id = self.source_map.borrow_mut().lookup(&file);
+        Some(Span::new(file_id, start.offset, end.offset))
     }
 }
 

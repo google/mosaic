@@ -18,6 +18,13 @@ pub struct Span {
 }
 
 impl Span {
+    pub fn new(file_id: FileId, start_offset: u32, end_offset: u32) -> Self {
+        Span {
+            file_id,
+            span: codespan::Span::new(start_offset, end_offset),
+        }
+    }
+
     pub fn label(&self, message: impl Into<String>) -> Label {
         Label(imp::Label::new(self.file_id, self.span, message))
     }

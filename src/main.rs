@@ -19,7 +19,6 @@ use clang::{
     source::{File, SourceRange},
     Accessibility, Clang, Entity, EntityKind, Parser, SourceError, TranslationUnit, Type, TypeKind,
 };
-use std::cell::RefCell;
 use std::convert::TryInto;
 use std::env;
 
@@ -78,7 +77,7 @@ impl<'tu> diagnostics::File<String> for File<'tu> {
 struct LowerCtx<'tu> {
     sess: &'tu Session,
     tu: &'tu TranslationUnit<'tu>,
-    source_map: RefCell<SourceFileMap<File<'tu>, String>>,
+    source_map: SourceFileMap<File<'tu>, String>,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
@@ -87,7 +86,7 @@ impl<'tu> LowerCtx<'tu> {
         LowerCtx {
             sess,
             tu,
-            source_map: RefCell::new(SourceFileMap::<File<'tu>, String>::new(&sess.diags)),
+            source_map: SourceFileMap::<File<'tu>, String>::new(&sess.diags),
             //visible: vec![],
         }
     }
@@ -144,7 +143,7 @@ impl<'tu> LowerCtx<'tu> {
         Ok(())
     }
 
-    fn handle_rust_export(&self, ns: Entity<'tu>, exports: &mut Vec<(Path, Export<'tu>)>) {
+    fn handle_rust_export(&mut self, ns: Entity<'tu>, exports: &mut Vec<(Path, Export<'tu>)>) {
         for decl in ns.get_children() {
             println!("{:?}", decl);
             let name = Path::from(decl.get_name().unwrap());
@@ -167,7 +166,7 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower_decl(&self, name: Path, decl_ref: Entity<'tu>, mdl: &mut ir::Module) {
+    fn lower_decl(&mut self, name: Path, decl_ref: Entity<'tu>, mdl: &mut ir::Module) {
         let overloads = decl_ref.get_overloaded_declarations().unwrap();
         assert_eq!(overloads.len(), 1);
         let ent = overloads[0];
@@ -183,7 +182,7 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower_struct(&self, name: Path, ent: Entity<'tu>, mdl: &mut ir::Module) {
+    fn lower_struct(&mut self, name: Path, ent: Entity<'tu>, mdl: &mut ir::Module) {
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
             self.sess
@@ -229,12 +228,12 @@ impl<'tu> LowerCtx<'tu> {
         mdl.structs.push(lowered);
     }
 
-    fn span(&self, ent: Entity<'tu>) -> Span {
+    fn span(&mut self, ent: Entity<'tu>) -> Span {
         self.maybe_span_from_range(ent.get_range())
             .expect("TODO dummy span")
     }
 
-    fn maybe_span_from_range(&self, range: Option<SourceRange<'tu>>) -> Option<Span> {
+    fn maybe_span_from_range(&mut self, range: Option<SourceRange<'tu>>) -> Option<Span> {
         let range = match range {
             Some(range) => range,
             None => return None,
@@ -247,7 +246,7 @@ impl<'tu> LowerCtx<'tu> {
             (Some(f), Some(g)) if f == g => f,
             _ => return None,
         };
-        let file_id = self.source_map.borrow_mut().lookup(&file);
+        let file_id = self.source_map.lookup(&file);
         Some(Span::new(file_id, start.offset, end.offset))
     }
 }

@@ -21,6 +21,7 @@ use clang::{
 };
 use std::convert::TryInto;
 use std::env;
+use std::error::Error;
 
 fn main() -> Result<(), SourceError> {
     let sess = Session::new();
@@ -29,6 +30,7 @@ fn main() -> Result<(), SourceError> {
     let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
     let tu = configure(index.parser(filename)).parse()?;
     LowerCtx::new(&sess, &tu).gen()?;
+    // TODO: check sess.diags.has_errors()
     Ok(())
 }
 
@@ -158,10 +160,15 @@ impl<'tu> LowerCtx<'tu> {
                 EntityKind::TypeAliasTemplateDecl => {
                     exports.push((name, Export::TemplateType(decl)))
                 }
-                _ => panic!(
-                    "Only using declarations are permitted inside rust_export:\n{}",
-                    decl.get_pretty_printer().print()
-                ),
+                _ => self
+                    .sess
+                    .diags
+                    .error(
+                        "invalid rust_export item",
+                        self.span(decl)
+                            .label("only using declarations are allowed here"),
+                    )
+                    .emit(),
             }
         }
     }
@@ -178,7 +185,15 @@ impl<'tu> LowerCtx<'tu> {
 
         match ent.get_kind() {
             EntityKind::StructDecl => self.lower_struct(name, ent, mdl),
-            other => eprintln!("{}: Unsupported type {:?}", name, other),
+            //other => eprintln!("{}: Unsupported type {:?}", name, other),
+            other => self
+                .sess
+                .diags
+                .error(
+                    format!("unsupported item type {:?}", other),
+                    self.span(ent).label("only structs are supported"),
+                )
+                .emit(),
         }
     }
 
@@ -195,27 +210,50 @@ impl<'tu> LowerCtx<'tu> {
             return;
         }
 
-        let mut fields = vec![];
-        let mut offsets = vec![];
+        // Check for incomplete types in one place.
+        // After that, alignof and every field offset should succeed.
+        let size = match ty.get_sizeof() {
+            Ok(size) => size.try_into().expect("size too big"),
+            Err(err) => {
+                self.sess
+                    .diags
+                    .error(
+                        "incomplete or dependent type",
+                        self.span(ent).label("only complete types can be exported"),
+                    )
+                    .with_note(err.description())
+                    .emit();
+                return;
+            }
+        };
+        let align = ty.get_alignof().unwrap().try_into().expect("align too big");
 
-        // TODO get rid of unwrap()
-        for field in ty.get_fields().unwrap() {
+        let ty_fields = ty.get_fields().unwrap();
+        let mut fields = Vec::with_capacity(ty_fields.len());
+        let mut offsets = Vec::with_capacity(ty_fields.len());
+        for field in ty_fields {
             if let Some(acc) = field.get_accessibility() {
                 if Accessibility::Public != acc {
                     continue;
                 }
             }
-            let field_name = field.get_name().unwrap();
+            let field_name = match field.get_name() {
+                Some(name) => name,
+                // Don't "peer through" anonymous struct/union fields, for now.
+                None => continue,
+            };
             let field_ty = field.get_type().unwrap();
             fields.push(Field {
                 name: Ident::from(field_name),
                 ty: field_ty.lower(),
             });
-            let offset = field.get_offset_of_field().unwrap().try_into().unwrap();
+            let offset = field
+                .get_offset_of_field()
+                .unwrap()
+                .try_into()
+                .expect("offset too big");
             offsets.push(offset);
         }
-        let size = ty.get_alignof().unwrap().try_into().unwrap();
-        let align = ty.get_alignof().unwrap().try_into().unwrap();
 
         let lowered = ir::Struct {
             name: name.clone(),

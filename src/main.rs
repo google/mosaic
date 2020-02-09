@@ -49,7 +49,7 @@ enum Export<'tu> {
     TemplateType(Entity<'tu>),
 }
 
-struct Session {
+pub struct Session {
     // TODO: opts
     diags: DiagnosticsCtx<String>,
 }
@@ -140,7 +140,7 @@ impl<'tu> LowerCtx<'tu> {
         }
 
         mdl.check();
-        codegen::perform_codegen(&mdl);
+        codegen::perform_codegen(self.sess, &mdl);
 
         Ok(())
     }
@@ -246,22 +246,35 @@ impl<'tu> LowerCtx<'tu> {
             fields.push(Field {
                 name: Ident::from(field_name),
                 ty: field_ty.lower(),
+                span: self.span(field),
             });
-            let offset = field
+            let offset: u16 = field
                 .get_offset_of_field()
                 .unwrap()
                 .try_into()
                 .expect("offset too big");
-            offsets.push(offset);
+            // TODO put this in a helper
+            if offset % 8 != 0 {
+                self.sess
+                    .diags
+                    .error(
+                        "bitfields are not supported",
+                        self.span(field)
+                            .label("only fields at byte offsets are supported"),
+                    )
+                    .emit();
+                return;
+            }
+            offsets.push(offset / 8);
         }
 
         let lowered = ir::Struct {
             name: name.clone(),
             fields,
             offsets,
-            repr: ir::Repr::C,
-            size: ir::Size::new(size).unwrap(),
-            align: ir::Align::new(align).unwrap(),
+            size: ir::Size::new(size),
+            align: ir::Align::new(align),
+            span: self.span(ent),
         };
         mdl.structs.push(lowered);
     }

@@ -1,4 +1,4 @@
-use crate::configure;
+use crate::libclang;
 use clang::{Index, TranslationUnit, Unsaved};
 use std::path::Path;
 
@@ -11,7 +11,7 @@ pub(crate) fn parse<'c>(index: &'c Index, src: &str) -> TranslationUnit<'c> {
     assert!(src.ends_with('}'));
     let src = &src[1..src.len() - 1];
     let test_filename = Path::new("__test__/test.cc");
-    let mut parser = configure(index.parser(&test_filename));
+    let mut parser = libclang::configure(index.parser(&test_filename));
     let unsaved = Unsaved::new(&test_filename, src);
     parser
         .unsaved(&[unsaved])

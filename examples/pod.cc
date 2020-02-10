@@ -1,7 +1,7 @@
 struct Pod {
   int a, b;
-  double c, d;
   char e;
+  double c, d;
 };
 
 namespace rust_export {

@@ -68,7 +68,7 @@ impl Ty {
         }
     }
 
-    fn into_rust(&self) -> Option<RustTy> {
+    pub fn into_rust(&self) -> Option<RustTy> {
         use Ty::*;
         Some(match self {
             Short => RustTy::I16,

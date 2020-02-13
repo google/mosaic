@@ -1,9 +1,23 @@
-use crate::libclang;
+use crate::{ir, libclang};
 use clang::{Index, TranslationUnit, Unsaved};
+use lazy_static::lazy_static;
 use std::path::Path;
+
+lazy_static! {
+    pub(crate) static ref CLANG: clang::Clang = clang::Clang::new().unwrap();
+}
 
 macro_rules! cpp_parse {
     { $clang:expr, $src:tt } => { $crate::test_util::parse($clang, stringify!($src)) }
+}
+
+macro_rules! cpp_lower {
+    { $sess:expr, $src:tt } => { {
+        //let clang = ::clang::Clang::new().unwrap();
+        let index = ::clang::Index::new(&$crate::test_util::CLANG, true, true);
+        let tu = $crate::test_util::parse(&index, stringify!($src));
+        $crate::libclang::lower($sess, tu)
+    } }
 }
 
 pub(crate) fn parse<'c>(index: &'c Index, src: &str) -> TranslationUnit<'c> {

@@ -275,10 +275,11 @@ fn should_inline(ent: Entity<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util;
 
     #[test]
     fn inline_namespace() {
-        let clang = clang::Clang::new().unwrap();
+        let clang = &test_util::CLANG;
         let index = clang::Index::new(&clang, true, true);
         let file = cpp_parse!(&index, {
             namespace std {

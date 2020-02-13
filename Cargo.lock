@@ -42,6 +42,11 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "libc"
 version = "0.2.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -69,6 +74,7 @@ dependencies = [
  "clang 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "codespan 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "codespan-reporting 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "termcolor 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror 1.0.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -157,6 +163,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum codespan 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "21094c000d5db8035900662bbfddec754e79f795324254ac0817f36e5ccfc3f5"
 "checksum codespan-reporting 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "657b2c99e1f17bc3e5153808d9f704c8ba6171c3fe45e69fde26e2876156938b"
 "checksum glob 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
+"checksum lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 "checksum libc 0.2.66 (registry+https://github.com/rust-lang/crates.io-index)" = "d515b1f41455adea1313a4a2ac8a8a477634fbae63cc6100e3aebb207ce61558"
 "checksum proc-macro2 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)" = "3acb317c6ff86a4e579dfa00fc5e6cca91ecbb4e7eb2df0468805b674eb88548"
 "checksum quote 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "053a8c8bcc71fcce321828dc897a98ab9760bef03a4fc36693c231e5b3216cfe"

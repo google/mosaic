@@ -20,6 +20,10 @@ pub fn parse_and_lower(sess: &Session, filename: &PathBuf) -> Result<ir::Module,
     let clang = Clang::new().unwrap();
     let index = clang::Index::new(&clang, false, true);
     let tu = configure(index.parser(filename)).parse()?;
+    lower(sess, tu)
+}
+
+pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> Result<ir::Module, Error> {
     let module = LowerCtx::new(sess, &tu).lower()?;
     Ok(module)
 }

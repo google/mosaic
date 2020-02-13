@@ -328,9 +328,10 @@ impl Struct {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Session;
 
     #[test]
-    fn test_align() {
+    fn align() {
         assert_eq!(align_to(5, Align::new(1)), 5);
         assert_eq!(align_to(2, Align::new(4)), 4);
         assert_eq!(align_to(4, Align::new(4)), 4);
@@ -339,4 +340,21 @@ mod tests {
     }
 
     // TODO layout tests
+
+    #[test]
+    fn pod() {
+        let sess = Session::new();
+        let ir = cpp_lower!(&sess, {
+            struct Pod {
+              int a, b;
+              char e;
+              double c, d;
+            };
+
+            namespace rust_export {
+              using ::Pod;
+            }
+        })
+        .unwrap();
+    }
 }

@@ -9,6 +9,8 @@ use crate::Session;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
 
+/// A set of C++ items being exposed to Rust. This is the top level of the IR
+/// representation.
 #[derive(Debug)]
 pub struct Module {
     pub structs: Vec<Struct>,
@@ -16,6 +18,14 @@ pub struct Module {
 impl Module {
     pub fn new() -> Module {
         Module { structs: vec![] }
+    }
+}
+
+impl Module {
+    pub fn check(&self) {
+        for st in &self.structs {
+            st.check();
+        }
     }
 }
 
@@ -301,14 +311,6 @@ impl Size {
 pub enum Repr {
     C,
     Opaque,
-}
-
-impl Module {
-    pub fn check(&self) {
-        for st in &self.structs {
-            st.check();
-        }
-    }
 }
 
 #[derive(Debug)]

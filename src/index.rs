@@ -41,6 +41,11 @@ impl NodeId {
 pub struct Ident {
     s: String,
 }
+impl Ident {
+    pub fn as_str(&self) -> &str {
+        &self.s
+    }
+}
 impl From<&str> for Ident {
     /// Creates an identifier. Can panic if the identifier is invalid.
     fn from(id: &str) -> Ident {

@@ -1,5 +1,5 @@
-use crate::{ir, libclang};
-use clang::{Index, TranslationUnit, Unsaved};
+use crate::{ir, libclang, Session};
+use clang::{self, TranslationUnit, Unsaved};
 use lazy_static::lazy_static;
 use std::path::Path;
 
@@ -12,15 +12,11 @@ macro_rules! cpp_parse {
 }
 
 macro_rules! cpp_lower {
-    { $sess:expr, $src:tt } => { {
-        //let clang = ::clang::Clang::new().unwrap();
-        let index = ::clang::Index::new(&$crate::test_util::CLANG, true, true);
-        let tu = $crate::test_util::parse(&index, stringify!($src));
-        $crate::libclang::lower($sess, tu)
-    } }
+    // TODO: { $src:tt => { $( $errs:expr ),* } } => { {
+    { $sess:expr, $src:tt } => { $crate::test_util::parse_and_lower($sess, stringify!($src)) }
 }
 
-pub(crate) fn parse<'c>(index: &'c Index, src: &str) -> TranslationUnit<'c> {
+pub(crate) fn parse<'c>(index: &'c clang::Index, src: &str) -> TranslationUnit<'c> {
     assert!(src.starts_with('{'));
     assert!(src.ends_with('}'));
     let src = &src[1..src.len() - 1];
@@ -31,4 +27,13 @@ pub(crate) fn parse<'c>(index: &'c Index, src: &str) -> TranslationUnit<'c> {
         .unsaved(&[unsaved])
         .parse()
         .expect("test input failed to parse")
+}
+
+pub(crate) fn parse_and_lower(sess: &Session, src: &str) -> ir::Module {
+    assert!(!sess.diags.has_errors()); // TODO has_diags()
+    let index = clang::Index::new(&CLANG, true, true);
+    let tu = parse(&index, src);
+    let ir = libclang::lower(sess, tu).unwrap();
+    assert!(!sess.diags.has_errors()); // TODO has_diags()
+    ir
 }

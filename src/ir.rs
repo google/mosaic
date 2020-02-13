@@ -339,22 +339,29 @@ mod tests {
         assert_eq!(align_to(0, Align::new(1)), 0);
     }
 
-    // TODO layout tests
-
     #[test]
-    fn pod() {
+    fn pod_layout() {
         let sess = Session::new();
         let ir = cpp_lower!(&sess, {
             struct Pod {
-              int a, b;
-              char e;
-              double c, d;
+                int a, b;
+                char c, d;
+                double e, f;
             };
-
             namespace rust_export {
-              using ::Pod;
+                using ::Pod;
             }
-        })
-        .unwrap();
+        });
+        let st = &ir.structs[0].into_rust(&sess).unwrap();
+        assert_eq!(
+            st.fields
+                .iter()
+                .map(|f| f.name.as_str())
+                .zip(st.offsets.iter().copied())
+                .collect::<Vec<_>>(),
+            vec![("a", 0), ("b", 4), ("c", 8), ("d", 9), ("e", 16), ("f", 24)],
+        );
     }
+
+    // TODO layout error tests (packed struct, bitfields)
 }

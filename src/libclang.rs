@@ -1,6 +1,5 @@
 use crate::{
     diagnostics::{self, SourceFileMap, Span},
-    index::{Ident, Path},
     ir::{self, *},
     util::DisplayName,
     Session,

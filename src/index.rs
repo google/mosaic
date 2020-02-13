@@ -1,10 +1,9 @@
 //! A lazily populated index for looking up entities by name.
 #![allow(dead_code)]
 
+use crate::ir::{Ident, Path};
 use clang::{self, Entity, EntityKind};
 use std::collections::HashMap;
-use std::fmt::{self, Debug, Display};
-use std::iter::{FromIterator, IntoIterator};
 use thiserror::Error;
 
 /// Represents errors which can occur while looking up entities in the index.
@@ -31,90 +30,6 @@ impl NodeId {
     #[inline(always)]
     fn as_usize(&self) -> usize {
         self.0 as usize
-    }
-}
-
-/// A C++ unqualified identifier.
-///
-/// Examples: `std`, `vector`, or `MyClass`.
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct Ident {
-    s: String,
-}
-impl Ident {
-    pub fn as_str(&self) -> &str {
-        &self.s
-    }
-}
-impl From<&str> for Ident {
-    /// Creates an identifier. Can panic if the identifier is invalid.
-    fn from(id: &str) -> Ident {
-        assert!(!id.contains("::"), "invalid identifier `{}`", id);
-        Ident { s: id.to_string() }
-    }
-}
-impl From<String> for Ident {
-    fn from(id: String) -> Ident {
-        From::from(id.as_str())
-    }
-}
-impl Display for Ident {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.s)
-    }
-}
-
-/// A C++ fully-qualified name.
-///
-/// Example: `std::vector`.
-#[derive(Clone, Hash, Eq, PartialEq)]
-pub struct Path {
-    components: Vec<Ident>,
-}
-impl From<&str> for Path {
-    fn from(mut path: &str) -> Path {
-        if path.starts_with("::") {
-            path = &path[2..];
-        }
-        Path {
-            components: path.split("::").map(Ident::from).collect(),
-        }
-    }
-}
-impl From<String> for Path {
-    fn from(path: String) -> Path {
-        From::from(path.as_str())
-    }
-}
-impl FromIterator<Ident> for Path {
-    fn from_iter<T: IntoIterator<Item = Ident>>(iter: T) -> Path {
-        Path {
-            components: iter.into_iter().collect(),
-        }
-    }
-}
-impl Path {
-    pub fn iter(&self) -> impl Iterator<Item = &Ident> {
-        self.components.iter()
-    }
-}
-impl Display for Path {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut iter = self.components.iter();
-        let mut next = iter.next();
-        while let Some(id) = next {
-            write!(f, "{}", id)?;
-            next = iter.next();
-            if next.is_some() {
-                write!(f, "::")?;
-            }
-        }
-        Ok(())
-    }
-}
-impl Debug for Path {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
     }
 }
 

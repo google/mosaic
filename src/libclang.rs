@@ -19,12 +19,12 @@ pub fn parse_and_lower(sess: &Session, filename: &PathBuf) -> Result<ir::Module,
     let clang = Clang::new().unwrap();
     let index = clang::Index::new(&clang, false, true);
     let tu = configure(index.parser(filename)).parse()?;
-    lower(sess, tu)
+    Ok(lower(sess, tu))
 }
 
-pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> Result<ir::Module, Error> {
-    let module = LowerCtx::new(sess, &tu).lower()?;
-    Ok(module)
+pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> ir::Module {
+    let module = LowerCtx::new(sess, &tu).lower();
+    module
 }
 
 pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
@@ -73,7 +73,7 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower(&mut self) -> Result<ir::Module, SourceError> {
+    fn lower(&mut self) -> ir::Module {
         //let mut visitor = AstVisitor::new(&self);
         let mut exports = vec![];
         for ent in self.tu.get_entity().get_children() {
@@ -119,7 +119,7 @@ impl<'tu> LowerCtx<'tu> {
             }
         }
 
-        Ok(mdl)
+        mdl
     }
 
     fn handle_rust_export(&mut self, ns: Entity<'tu>, exports: &mut Vec<(Path, Export<'tu>)>) {

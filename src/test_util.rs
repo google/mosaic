@@ -33,7 +33,7 @@ pub(crate) fn parse_and_lower(sess: &Session, src: &str) -> ir::Module {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
     let index = clang::Index::new(&CLANG, true, true);
     let tu = parse(&index, src);
-    let ir = libclang::lower(sess, tu).unwrap();
+    let ir = libclang::lower(sess, tu);
     assert!(!sess.diags.has_errors()); // TODO has_diags()
     ir
 }

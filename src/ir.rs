@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn pod_layout() {
-        let sess = Session::new();
+        let sess = Session::test();
         let ir = cpp_lower!(&sess, {
             struct Pod {
                 int a, b;
@@ -448,5 +448,35 @@ mod tests {
         );
     }
 
-    // TODO layout error tests (packed struct, bitfields)
+    #[test]
+    fn packed() {
+        let sess = Session::test();
+        let ir = cpp_lower!(&sess, {
+            struct __attribute__((__packed__)) Pod {
+                int a, b;
+                char c, d;
+                double e, f;
+            };
+            namespace rust_export {
+                using ::Pod;
+            }
+        });
+        assert!(ir.structs[0].into_rust(&sess).is_none());
+        assert_eq!(vec!["unexpected field offset"], sess.diags.get_test());
+    }
+
+    #[test]
+    fn bitfields() {
+        let sess = Session::test();
+        cpp_lower!(&sess, {
+            struct Pod {
+                int a : 3, b : 2;
+            };
+            namespace rust_export {
+                using ::Pod;
+            }
+        } => {
+            "bitfields are not supported"
+        });
+    }
 }

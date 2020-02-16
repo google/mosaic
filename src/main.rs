@@ -20,9 +20,16 @@ pub struct Session {
 }
 
 impl Session {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Session {
             diags: DiagnosticsCtx::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test() -> Self {
+        Session {
+            diags: DiagnosticsCtx::test(),
         }
     }
 }

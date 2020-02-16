@@ -42,7 +42,12 @@ pub struct DiagnosticsCtx<S: AsRef<str>>(Rc<RefCell<CtxInner<S>>>);
 struct CtxInner<Source: AsRef<str>> {
     files: Files<Source>,
     counts: Counts,
-    writer: termcolor::StandardStream,
+    mode: Mode,
+}
+
+enum Mode {
+    Term { writer: termcolor::StandardStream },
+    Test { errs: Vec<String> },
 }
 
 type Count = u32;
@@ -60,9 +65,29 @@ impl<S: AsRef<str>> DiagnosticsCtx<S> {
         let inner = CtxInner {
             files: Files::new(),
             counts: Counts::default(),
-            writer: termcolor::StandardStream::stderr(ColorChoice::Auto),
+            mode: Mode::Term {
+                writer: termcolor::StandardStream::stderr(ColorChoice::Auto),
+            },
         };
         DiagnosticsCtx(Rc::new(RefCell::new(inner)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test() -> Self {
+        let inner = CtxInner {
+            files: Files::new(),
+            counts: Counts::default(),
+            mode: Mode::Test { errs: vec![] },
+        };
+        DiagnosticsCtx(Rc::new(RefCell::new(inner)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_test(&self) -> Vec<String> {
+        match &self.0.borrow().mode {
+            Mode::Test { errs } => errs.clone(),
+            _ => panic!("expected test mode"),
+        }
     }
 
     pub fn bug(&self, message: impl Into<String>, primary_label: Label) -> Diagnostic<'_, S> {
@@ -116,13 +141,14 @@ impl<'ctx, S: AsRef<str>> Diagnostic<'ctx, S> {
     }
 
     pub fn emit(self) {
-        let CtxInner {
-            ref mut writer,
-            ref files,
-            ..
-        } = &mut *self.ctx.0.borrow_mut();
-        term::emit(writer, &Default::default(), files, &self.diag)
-            .expect("failed to emit diagnostic");
+        let inner = &mut *self.ctx.0.borrow_mut();
+        match &mut inner.mode {
+            Mode::Term { writer } => {
+                term::emit(writer, &Default::default(), &inner.files, &self.diag)
+                    .expect("failed to emit diagnostic")
+            }
+            Mode::Test { errs } => errs.push(self.diag.message),
+        }
     }
 
     pub fn with_note(mut self, note: impl Into<String>) -> Self {

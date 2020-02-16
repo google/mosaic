@@ -12,8 +12,12 @@ macro_rules! cpp_parse {
 }
 
 macro_rules! cpp_lower {
-    // TODO: { $src:tt => { $( $errs:expr ),* } } => { {
-    { $sess:expr, $src:tt } => { $crate::test_util::parse_and_lower($sess, stringify!($src)) }
+    { $sess:expr, $src:tt => { $( $errs:expr ),* } } => {
+        $crate::test_util::parse_and_lower($sess, stringify!($src), vec![$($errs),*])
+    };
+    { $sess:expr, $src:tt } => {
+        $crate::test_util::parse_and_lower($sess, stringify!($src), vec![])
+    };
 }
 
 pub(crate) fn parse<'c>(index: &'c clang::Index, src: &str) -> TranslationUnit<'c> {
@@ -29,11 +33,16 @@ pub(crate) fn parse<'c>(index: &'c clang::Index, src: &str) -> TranslationUnit<'
         .expect("test input failed to parse")
 }
 
-pub(crate) fn parse_and_lower(sess: &Session, src: &str) -> ir::Module {
+pub(crate) fn parse_and_lower(sess: &Session, src: &str, expected: Vec<&str>) -> ir::Module {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
     let index = clang::Index::new(&CLANG, true, true);
     let tu = parse(&index, src);
     let ir = libclang::lower(sess, tu);
-    assert!(!sess.diags.has_errors()); // TODO has_diags()
+
+    let errs = sess.diags.get_test();
+    assert_eq!(
+        expected, errs,
+        "did not get the expected set of lowering errors"
+    );
     ir
 }

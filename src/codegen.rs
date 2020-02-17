@@ -4,7 +4,7 @@ use crate::ir::*;
 use crate::Session;
 
 pub fn perform_codegen(sess: &Session, mdl: &Module) {
-    for st in &mdl.structs {
+    for (_, st) in mdl.structs() {
         let rust_st = st.to_rust(sess);
         codegen_struct(sess, &rust_st);
     }

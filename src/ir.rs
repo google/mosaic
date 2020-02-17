@@ -13,11 +13,24 @@ use std::{fmt, iter};
 /// representation.
 #[derive(Debug)]
 pub struct Module {
-    pub structs: Vec<Struct>,
+    structs: Vec<Struct>,
 }
 impl Module {
     pub fn new() -> Module {
         Module { structs: vec![] }
+    }
+
+    pub fn structs(&self) -> impl Iterator<Item = (StructId, &Struct)> {
+        self.structs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (StructId(i), s))
+    }
+
+    pub fn add_struct(&mut self, st: Struct) -> StructId {
+        let id = StructId(self.structs.len());
+        self.structs.push(st);
+        id
     }
 }
 
@@ -37,8 +50,20 @@ impl Module {
 
 #[derive(Debug)]
 pub struct RustModule {
-    pub structs: Vec<RustStruct>,
+    structs: Vec<RustStruct>,
 }
+
+impl RustModule {
+    pub fn structs(&self) -> impl Iterator<Item = (StructId, &RustStruct)> {
+        self.structs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (StructId(i), s))
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct StructId(usize);
 
 /// A C++ unqualified identifier.
 ///
@@ -151,6 +176,8 @@ pub enum Ty {
     Double,
 
     Bool,
+
+    Struct(StructId),
 }
 
 impl Ty {
@@ -162,6 +189,7 @@ impl Ty {
             | SChar | UChar | Size | SSize | PtrDiff => true,
             Float | Double => false,
             Bool => false,
+            Struct(_) => false,
         }
     }
 
@@ -173,6 +201,7 @@ impl Ty {
             Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS | CharU
             | SChar | UChar | Size | SSize | PtrDiff => false,
             Bool => false,
+            Struct(_) => false,
         }
     }
 
@@ -200,6 +229,7 @@ impl Ty {
             Float => RustTy::F32,
             Double => RustTy::F64,
             Bool => RustTy::Bool,
+            Struct(id) => RustTy::Struct(*id), // StructIds are preserved
         }
     }
 }
@@ -222,6 +252,8 @@ pub enum RustTy {
     F32,
     F64,
     Bool,
+
+    Struct(StructId),
 }
 
 impl RustTy {
@@ -238,6 +270,7 @@ impl RustTy {
             F32 => 4,
             F64 => 8,
             Bool => 1,
+            Struct(_) => unimplemented!(),
         };
         Size::new(sz)
     }
@@ -266,6 +299,7 @@ impl fmt::Display for RustTy {
             F32 => "f32",
             F64 => "f64",
             Bool => "bool",
+            Struct(_) => unimplemented!(),
         };
         write!(f, "{}", name)
     }
@@ -498,5 +532,25 @@ mod tests {
         } => [
             "bitfields are not supported"
         ]);
+    }
+
+    #[test]
+    #[should_panic] // TODO
+    fn nested_struct() {
+        let sess = Session::test();
+        let ir = cpp_lower!(&sess, {
+            struct Foo {
+                int a, b;
+            };
+            struct Bar {
+                char c, d;
+                Foo foo;
+            };
+            namespace rust_export {
+                using ::Bar;
+            }
+        });
+        let st = &ir.structs[0];
+        assert_eq!(Size::new(12), st.size);
     }
 }

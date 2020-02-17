@@ -253,7 +253,7 @@ impl<'tu> LowerCtx<'tu> {
             align: ir::Align::new(align),
             span: self.span(ent),
         };
-        mdl.structs.push(lowered);
+        mdl.add_struct(lowered);
     }
 
     fn span(&mut self, ent: Entity<'tu>) -> Span {

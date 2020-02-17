@@ -1,6 +1,6 @@
 use crate::{
     diagnostics::{self, SourceFileMap, Span},
-    ir::{self, *},
+    ir::cc::{self, *},
     util::DisplayName,
     Session,
 };
@@ -15,14 +15,14 @@ use std::path::PathBuf;
 
 pub type Error = SourceError;
 
-pub fn parse_and_lower(sess: &Session, filename: &PathBuf) -> Result<ir::Module, Error> {
+pub fn parse_and_lower(sess: &Session, filename: &PathBuf) -> Result<cc::Module, Error> {
     let clang = Clang::new().unwrap();
     let index = clang::Index::new(&clang, false, true);
     let tu = configure(index.parser(filename)).parse()?;
     Ok(lower(sess, tu))
 }
 
-pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> ir::Module {
+pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> cc::Module {
     let module = LowerCtx::new(sess, &tu).lower();
     module
 }
@@ -73,7 +73,7 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower(&mut self) -> ir::Module {
+    fn lower(&mut self) -> cc::Module {
         //let mut visitor = AstVisitor::new(&self);
         let mut exports = vec![];
         for ent in self.tu.get_entity().get_children() {
@@ -84,7 +84,7 @@ impl<'tu> LowerCtx<'tu> {
             }
         }
 
-        let mut mdl = ir::Module::new();
+        let mut mdl = cc::Module::new();
         for (name, export) in exports {
             match export {
                 Export::Decl(decl_ref) => self.lower_decl(name, decl_ref, &mut mdl),
@@ -150,7 +150,7 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower_decl(&mut self, name: Path, decl_ref: Entity<'tu>, mdl: &mut ir::Module) {
+    fn lower_decl(&mut self, name: Path, decl_ref: Entity<'tu>, mdl: &mut cc::Module) {
         let overloads = decl_ref.get_overloaded_declarations().unwrap();
         assert_eq!(overloads.len(), 1);
         let ent = overloads[0];
@@ -174,7 +174,7 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower_struct(&mut self, name: Path, ent: Entity<'tu>, mdl: &mut ir::Module) {
+    fn lower_struct(&mut self, name: Path, ent: Entity<'tu>, mdl: &mut cc::Module) {
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
             self.sess
@@ -245,12 +245,12 @@ impl<'tu> LowerCtx<'tu> {
             offsets.push(offset / 8);
         }
 
-        let lowered = ir::Struct {
+        let lowered = cc::Struct {
             name: name.clone(),
             fields,
             offsets,
-            size: ir::Size::new(size),
-            align: ir::Align::new(align),
+            size: cc::Size::new(size),
+            align: cc::Align::new(align),
             span: self.span(ent),
         };
         mdl.add_struct(lowered);

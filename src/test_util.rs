@@ -33,7 +33,7 @@ pub(crate) fn parse<'c>(index: &'c clang::Index, src: &str) -> TranslationUnit<'
         .expect("test input failed to parse")
 }
 
-pub(crate) fn parse_and_lower(sess: &Session, src: &str, expected: Vec<&str>) -> ir::RustModule {
+pub(crate) fn parse_and_lower(sess: &Session, src: &str, expected: Vec<&str>) -> ir::rs::Module {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
     let index = clang::Index::new(&CLANG, true, true);
     let tu = parse(&index, src);

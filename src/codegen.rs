@@ -1,12 +1,11 @@
 //! Generates Rust code from IR.
 
-use crate::ir::{cc, rs};
+use crate::ir::rs;
 use crate::Session;
 
-pub fn perform_codegen(sess: &Session, mdl: &cc::Module) {
+pub fn perform_codegen(sess: &Session, mdl: &rs::Module) {
     for (_, st) in mdl.structs() {
-        let rust_st = st.to_rust(sess);
-        codegen_struct(sess, &rust_st);
+        codegen_struct(sess, &st);
     }
 }
 

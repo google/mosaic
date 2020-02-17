@@ -39,7 +39,8 @@ fn main() -> Result<(), libclang::Error> {
     let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
     let module = libclang::parse_and_lower(&sess, &filename.into())?;
     module.check();
-    codegen::perform_codegen(&sess, &module);
+    let rs_module = module.to_rust(&sess);
+    codegen::perform_codegen(&sess, &rs_module);
     // TODO: check sess.diags.has_errors()
     Ok(())
 }

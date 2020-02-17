@@ -8,8 +8,6 @@
 //! converting between IRs contains explicit checks that the semantics in one
 //! language IR can be represented in the other.
 
-#![allow(dead_code)]
-
 use crate::diagnostics::Span;
 use crate::Session;
 use std::num::NonZeroU16;
@@ -30,6 +28,7 @@ mod common {
         s: String,
     }
     impl Ident {
+        #[allow(dead_code)]
         pub fn as_str(&self) -> &str {
             &self.s
         }
@@ -160,6 +159,7 @@ pub mod cc {
             Module { structs: vec![] }
         }
 
+        #[allow(dead_code)]
         pub fn structs(&self) -> impl Iterator<Item = (StructId, &Struct)> {
             self.structs
                 .iter()
@@ -189,6 +189,7 @@ pub mod cc {
     }
 
     #[derive(Debug, Eq, PartialEq, Clone)]
+    #[allow(dead_code)]
     pub enum Ty {
         Error,
 
@@ -219,6 +220,7 @@ pub mod cc {
         Struct(StructId),
     }
 
+    #[allow(dead_code)]
     impl Ty {
         pub fn is_integral(&self) -> bool {
             use Ty::*;
@@ -472,6 +474,7 @@ pub mod rs {
     }
 
     #[derive(Debug, PartialEq, Eq)]
+    #[allow(dead_code)]
     pub enum Repr {
         C,
         Opaque,

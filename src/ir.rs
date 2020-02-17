@@ -27,6 +27,17 @@ impl Module {
             st.check();
         }
     }
+
+    pub fn to_rust(&self, sess: &Session) -> RustModule {
+        RustModule {
+            structs: self.structs.iter().map(|s| s.to_rust(sess)).collect(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RustModule {
+    pub structs: Vec<RustStruct>,
 }
 
 /// A C++ unqualified identifier.
@@ -115,6 +126,8 @@ impl fmt::Debug for Path {
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum Ty {
+    Error,
+
     Short,
     UShort,
     Int,
@@ -144,6 +157,7 @@ impl Ty {
     pub fn is_integral(&self) -> bool {
         use Ty::*;
         match self {
+            Error => false,
             Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS | CharU
             | SChar | UChar | Size | SSize | PtrDiff => true,
             Float | Double => false,
@@ -154,6 +168,7 @@ impl Ty {
     pub fn is_floating(&self) -> bool {
         use Ty::*;
         match self {
+            Error => false,
             Float | Double => true,
             Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS | CharU
             | SChar | UChar | Size | SSize | PtrDiff => false,
@@ -161,9 +176,14 @@ impl Ty {
         }
     }
 
-    pub fn into_rust(&self) -> Option<RustTy> {
+    pub fn is_error(&self) -> bool {
+        self == &Ty::Error
+    }
+
+    pub fn to_rust(&self) -> RustTy {
         use Ty::*;
-        Some(match self {
+        match self {
+            Error => RustTy::Error,
             Short => RustTy::I16,
             UShort => RustTy::U16,
             Int => RustTy::I32,
@@ -180,13 +200,15 @@ impl Ty {
             Float => RustTy::F32,
             Double => RustTy::F64,
             Bool => RustTy::Bool,
-        })
+        }
     }
 }
 
 /// Represents properties of a Rust type in a #[repr(C)] struct.
 #[derive(Debug, Clone)]
 pub enum RustTy {
+    Error,
+
     U8,
     I8,
     U16,
@@ -206,6 +228,7 @@ impl RustTy {
     pub fn size(&self) -> Size {
         use RustTy::*;
         let sz = match self {
+            Error => 1,
             U8 | I8 => 1,
             U16 | I16 => 2,
             U32 | I32 => 4,
@@ -229,6 +252,7 @@ impl fmt::Display for RustTy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use RustTy::*;
         let name = match self {
+            Error => "<error>",
             U8 => "u8",
             I8 => "i8",
             U16 => "u16",
@@ -329,22 +353,18 @@ impl Struct {
         // TODO
     }
 
-    pub fn into_rust(&self, sess: &Session) -> Option<RustStruct> {
+    pub fn to_rust(&self, sess: &Session) -> RustStruct {
         let fields = self
             .fields
             .iter()
-            .map(|f| {
-                Some(RustField {
-                    name: f.name.clone(),
-                    ty: f.ty.into_rust()?,
-                    span: f.span.clone(),
-                })
+            .map(|f| RustField {
+                name: f.name.clone(),
+                ty: f.ty.to_rust(),
+                span: f.span.clone(),
             })
-            .collect::<Option<Vec<_>>>()?;
-        if !self.check_offsets(sess, &fields) {
-            return None;
-        }
-        Some(RustStruct {
+            .collect::<Vec<_>>();
+        self.check_offsets(sess, &fields);
+        RustStruct {
             name: self.name.clone(),
             fields,
             offsets: self.offsets.clone(),
@@ -352,7 +372,7 @@ impl Struct {
             size: self.size,
             align: self.align,
             span: self.span.clone(),
-        })
+        }
     }
 
     fn check_offsets(&self, sess: &Session, fields: &Vec<RustField>) -> bool {
@@ -437,7 +457,7 @@ mod tests {
                 using ::Pod;
             }
         });
-        let st = &ir.structs[0].into_rust(&sess).unwrap();
+        let st = &ir.structs[0];
         assert_eq!(
             st.fields
                 .iter()
@@ -451,7 +471,7 @@ mod tests {
     #[test]
     fn packed() {
         let sess = Session::test();
-        let ir = cpp_lower!(&sess, {
+        cpp_lower!(&sess, {
             struct __attribute__((__packed__)) Pod {
                 int a, b;
                 char c, d;
@@ -460,9 +480,9 @@ mod tests {
             namespace rust_export {
                 using ::Pod;
             }
-        });
-        assert!(ir.structs[0].into_rust(&sess).is_none());
-        assert_eq!(vec!["unexpected field offset"], sess.diags.get_test());
+        } => [
+            "unexpected field offset"
+        ]);
     }
 
     #[test]
@@ -475,8 +495,8 @@ mod tests {
             namespace rust_export {
                 using ::Pod;
             }
-        } => {
+        } => [
             "bitfields are not supported"
-        });
+        ]);
     }
 }

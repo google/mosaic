@@ -5,9 +5,8 @@ use crate::Session;
 
 pub fn perform_codegen(sess: &Session, mdl: &Module) {
     for st in &mdl.structs {
-        if let Some(st) = st.into_rust(sess) {
-            codegen_struct(sess, &st);
-        }
+        let rust_st = st.to_rust(sess);
+        codegen_struct(sess, &rust_st);
     }
 }
 

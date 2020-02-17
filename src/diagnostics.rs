@@ -141,12 +141,10 @@ impl<'ctx, S: AsRef<str>> Diagnostic<'ctx, S> {
     }
 
     pub fn emit(self) {
-        let inner = &mut *self.ctx.0.borrow_mut();
-        match &mut inner.mode {
-            Mode::Term { writer } => {
-                term::emit(writer, &Default::default(), &inner.files, &self.diag)
-                    .expect("failed to emit diagnostic")
-            }
+        let CtxInner { mode, files, .. } = &mut *self.ctx.0.borrow_mut();
+        match mode {
+            Mode::Term { writer } => term::emit(writer, &Default::default(), files, &self.diag)
+                .expect("failed to emit diagnostic"),
             Mode::Test { errs } => errs.push(self.diag.message),
         }
     }

@@ -13,12 +13,33 @@ use crate::Session;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
 
+macro_rules! intern_key {
+    ($name:ident) => {
+        #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+        pub struct $name(::salsa::InternId);
+
+        impl $name {
+            pub(super) fn new(v: u32) -> Self {
+                Self(::salsa::InternId::from(v))
+            }
+        }
+
+        impl ::salsa::InternKey for $name {
+            fn from_intern_id(v: ::salsa::InternId) -> Self {
+                $name(v)
+            }
+            fn as_intern_id(&self) -> ::salsa::InternId {
+                self.0
+            }
+        }
+    };
+}
+
 /// Types and utilities used from both the Rust and C++ IRs.
 mod common {
     use super::*;
 
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-    pub struct StructId(pub(super) usize);
+    intern_key!(StructId);
 
     /// A C++ unqualified identifier.
     ///
@@ -164,11 +185,11 @@ pub mod cc {
             self.structs
                 .iter()
                 .enumerate()
-                .map(|(i, s)| (StructId(i), s))
+                .map(|(i, s)| (StructId::new(i as u32 + 1), s))
         }
 
         pub fn add_struct(&mut self, st: Struct) -> StructId {
-            let id = StructId(self.structs.len());
+            let id = StructId::new(self.structs.len() as u32 + 1);
             self.structs.push(st);
             id
         }
@@ -391,7 +412,7 @@ pub mod rs {
             self.structs
                 .iter()
                 .enumerate()
-                .map(|(i, s)| (StructId(i), s))
+                .map(|(i, s)| (StructId::new(i as u32 + 1), s))
         }
     }
 

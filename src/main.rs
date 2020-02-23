@@ -10,6 +10,7 @@ mod diagnostics;
 mod index;
 mod ir;
 mod libclang;
+mod salsa_test;
 
 use crate::diagnostics::DiagnosticsCtx;
 use std::env;

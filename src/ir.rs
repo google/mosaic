@@ -13,28 +13,6 @@ use crate::Session;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
 
-macro_rules! intern_key {
-    ($name:ident) => {
-        #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-        pub struct $name(::salsa::InternId);
-
-        impl $name {
-            pub(super) fn new(v: u32) -> Self {
-                Self(::salsa::InternId::from(v))
-            }
-        }
-
-        impl ::salsa::InternKey for $name {
-            fn from_intern_id(v: ::salsa::InternId) -> Self {
-                $name(v)
-            }
-            fn as_intern_id(&self) -> ::salsa::InternId {
-                self.0
-            }
-        }
-    };
-}
-
 /// Types and utilities used from both the Rust and C++ IRs.
 mod common {
     use super::*;
@@ -171,7 +149,7 @@ pub mod cc {
 
     /// A set of C++ items being exposed to Rust. This is the top level of the IR
     /// representation.
-    #[derive(Debug)]
+    #[derive(Debug, Eq, PartialEq)]
     pub struct Module {
         structs: Vec<Struct>,
     }
@@ -296,7 +274,7 @@ pub mod cc {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Eq, PartialEq)]
     pub struct Struct {
         pub name: Path,
         pub fields: Vec<Field>,
@@ -306,7 +284,7 @@ pub mod cc {
         pub span: Span,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Eq, PartialEq)]
     pub struct Field {
         pub name: Ident,
         pub ty: Ty,

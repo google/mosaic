@@ -14,7 +14,7 @@ use termcolor::{self, ColorChoice};
 pub use codespan::FileId;
 
 /// The source code associated with an object.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Span {
     file_id: FileId,
     span: codespan::Span,

@@ -1,5 +1,27 @@
 use clang::{Entity, Type};
 
+macro_rules! intern_key {
+    ($name:ident) => {
+        #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+        pub struct $name(::salsa::InternId);
+
+        impl $name {
+            pub(super) fn new(v: u32) -> Self {
+                Self(::salsa::InternId::from(v))
+            }
+        }
+
+        impl ::salsa::InternKey for $name {
+            fn from_intern_id(v: ::salsa::InternId) -> Self {
+                $name(v)
+            }
+            fn as_intern_id(&self) -> ::salsa::InternId {
+                self.0
+            }
+        }
+    };
+}
+
 pub(crate) const INDENT_SPACES: usize = 2;
 
 macro_rules! print_indent {

@@ -1,4 +1,6 @@
+use clang;
 use salsa;
+use std::sync::Arc;
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct IR;
@@ -7,7 +9,40 @@ pub struct IR;
 pub trait CcIrFromSrc {
     #[salsa::input]
     fn cc_ir_from_src(&self) -> IR;
+
+    #[salsa::input]
+    fn clang(&self) -> Arc<clang::Clang>;
+    //fn index<'i>(&'i self) -> Arc<clang::Index<'i>>;
 }
+
+trait Test {
+    fn index<'i>(&'i self) -> Arc<clang::Index<'i>>;
+}
+
+//fn index<'i>(db: &'i impl CcIrFromSrc) -> Arc<clang::Index<'i>> {
+//    Arc::new(clang::Index::new(&*db.clang(), false, false))
+//}
+
+//fn index() -> Arc<AstIndex> {
+//    let clang = Arc::new(clang::Clang::new().unwrap());
+//    Arc::new(AstIndex::new(clang, |cl| {
+//        clang::Index::new(&*cl, false, false)
+//    }))
+//}
+
+//fn parse_file(path: &std::path::Path) -> Arc<AstFile> {
+//    let index = index();
+//    Arc::new(AstFile::new(index, |i| {
+//        let parser = i.index.parser(path);
+//        parser.parse().unwrap()
+//    }))
+//}
+
+//fn index() -> ! {
+//    let clang = ArcRef::new(Arc::new(clang::Clang::new().unwrap()));
+//    let index = clang.map(|cl| clang::Index::new(&*clang, false, false));
+//    panic!()
+//}
 
 #[salsa::query_group(CcIrFromRsStorage)]
 pub trait CcIrFromRs {
@@ -21,7 +56,7 @@ fn cc_ir_from_rs(_db: &impl CcIrFromRs) -> IR {
 #[salsa::query_group(CcIrStorage)]
 #[salsa::requires(CcIrFromSrc)]
 #[salsa::requires(CcIrFromRs)]
-pub trait CcIr {
+pub trait CcIr<'a> {
     fn cc_ir(&self) -> IR;
 }
 

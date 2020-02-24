@@ -5,6 +5,9 @@ mod test_util;
 #[macro_use]
 mod util;
 
+#[macro_use]
+extern crate rental;
+
 mod codegen;
 mod diagnostics;
 mod index;

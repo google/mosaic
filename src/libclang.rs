@@ -13,6 +13,8 @@ use std::convert::TryInto;
 use std::error::Error as _;
 use std::path::PathBuf;
 
+mod db;
+
 pub type Error = SourceError;
 
 pub fn parse_and_lower(sess: &Session, filename: &PathBuf) -> Result<cc::Module, Error> {
@@ -36,10 +38,50 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
     parser
 }
 
+#[derive(Clone, Debug)]
+enum AstKind<'tu> {
+    Entity(clang::Entity<'tu>),
+    Type(clang::Type<'tu>),
+}
+impl<'tu> AstKind<'tu> {
+    fn entity(&self) -> Option<clang::Entity<'tu>> {
+        match self {
+            AstKind::Entity(ent) => Some(*ent),
+            _ => None,
+        }
+    }
+    fn ty(&self) -> Option<clang::Type<'tu>> {
+        match self {
+            AstKind::Type(ty) => Some(*ty),
+            _ => None,
+        }
+    }
+}
+impl<'tu> From<clang::Entity<'tu>> for AstKind<'tu> {
+    fn from(from: clang::Entity<'tu>) -> AstKind<'tu> {
+        AstKind::Entity(from)
+    }
+}
+impl<'tu> From<clang::Type<'tu>> for AstKind<'tu> {
+    fn from(from: clang::Type<'tu>) -> AstKind<'tu> {
+        AstKind::Type(from)
+    }
+}
+
+#[derive(Clone, Debug)]
 enum Export<'tu> {
     Decl(Entity<'tu>),
     Type(Type<'tu>),
     TemplateType(Entity<'tu>),
+}
+impl<'tu> Export<'tu> {
+    fn get(&self) -> AstKind {
+        match self {
+            Export::Decl(ent) => AstKind::Entity(*ent),
+            Export::Type(ty) => AstKind::Type(*ty),
+            Export::TemplateType(ent) => AstKind::Entity(*ent),
+        }
+    }
 }
 
 impl<'tu> diagnostics::File<String> for File<'tu> {

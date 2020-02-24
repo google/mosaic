@@ -1,5 +1,5 @@
 use crate::{
-    diagnostics::{self, SourceFileMap, Span},
+    diagnostics::{self, Diagnostic, SourceFileMap, Span},
     ir::cc::{self, *},
     util::DisplayName,
     Session,
@@ -13,7 +13,7 @@ use std::convert::TryInto;
 use std::error::Error as _;
 use std::path::PathBuf;
 
-mod db;
+pub(crate) mod db;
 
 pub type Error = SourceError;
 
@@ -179,15 +179,12 @@ impl<'tu> LowerCtx<'tu> {
                 EntityKind::TypeAliasTemplateDecl => {
                     exports.push((name, Export::TemplateType(decl)))
                 }
-                _ => self
-                    .sess
-                    .diags
-                    .error(
-                        "invalid rust_export item",
-                        self.span(decl)
-                            .label("only using declarations are allowed here"),
-                    )
-                    .emit(),
+                _ => Diagnostic::error(
+                    "invalid rust_export item",
+                    self.span(decl)
+                        .label("only using declarations are allowed here"),
+                )
+                .emit(&self.sess.diags),
             }
         }
     }
@@ -205,27 +202,22 @@ impl<'tu> LowerCtx<'tu> {
         match ent.get_kind() {
             EntityKind::StructDecl => self.lower_struct(name, ent, mdl),
             //other => eprintln!("{}: Unsupported type {:?}", name, other),
-            other => self
-                .sess
-                .diags
-                .error(
-                    format!("unsupported item type {:?}", other),
-                    self.span(ent).label("only structs are supported"),
-                )
-                .emit(),
+            other => Diagnostic::error(
+                format!("unsupported item type {:?}", other),
+                self.span(ent).label("only structs are supported"),
+            )
+            .emit(&self.sess.diags),
         }
     }
 
     fn lower_struct(&mut self, name: Path, ent: Entity<'tu>, mdl: &mut cc::Module) {
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
-            self.sess
-                .diags
-                .error(
-                    "unsupported type",
-                    self.span(ent).label("only POD structs are supported"),
-                )
-                .emit();
+            Diagnostic::error(
+                "unsupported type",
+                self.span(ent).label("only POD structs are supported"),
+            )
+            .emit(&self.sess.diags);
             return;
         }
 
@@ -234,14 +226,12 @@ impl<'tu> LowerCtx<'tu> {
         let size = match ty.get_sizeof() {
             Ok(size) => size.try_into().expect("size too big"),
             Err(err) => {
-                self.sess
-                    .diags
-                    .error(
-                        "incomplete or dependent type",
-                        self.span(ent).label("only complete types can be exported"),
-                    )
-                    .with_note(err.description())
-                    .emit();
+                Diagnostic::error(
+                    "incomplete or dependent type",
+                    self.span(ent).label("only complete types can be exported"),
+                )
+                .with_note(err.description())
+                .emit(&self.sess.diags);
                 return;
             }
         };
@@ -274,14 +264,12 @@ impl<'tu> LowerCtx<'tu> {
                 .expect("offset too big");
             // TODO put this in a helper
             if offset % 8 != 0 {
-                self.sess
-                    .diags
-                    .error(
-                        "bitfields are not supported",
-                        self.span(field)
-                            .label("only fields at byte offsets are supported"),
-                    )
-                    .emit();
+                Diagnostic::error(
+                    "bitfields are not supported",
+                    self.span(field)
+                        .label("only fields at byte offsets are supported"),
+                )
+                .emit(&self.sess.diags);
                 return;
             }
             offsets.push(offset / 8);

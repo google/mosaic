@@ -8,7 +8,7 @@
 //! converting between IRs contains explicit checks that the semantics in one
 //! language IR can be represented in the other.
 
-use crate::diagnostics::Span;
+use crate::diagnostics::{Diagnostic, Span};
 use crate::Session;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
@@ -328,18 +328,17 @@ pub mod cc {
 
                 // Here's where we could add padding, if we wanted to.
                 if offset != self.offsets[idx] {
-                    sess.diags
-                        .error(
-                            "unexpected field offset",
-                            field
-                                .span
-                                .label("this field was not at the expected offset"),
-                        )
-                        .with_note(format!(
-                            "expected an offset of {}, but the offset is {}",
-                            offset, self.offsets[idx]
-                        ))
-                        .emit();
+                    Diagnostic::error(
+                        "unexpected field offset",
+                        field
+                            .span
+                            .label("this field was not at the expected offset"),
+                    )
+                    .with_note(format!(
+                        "expected an offset of {}, but the offset is {}",
+                        offset, self.offsets[idx]
+                    ))
+                    .emit(&sess.diags);
                     return false;
                 }
 
@@ -348,7 +347,7 @@ pub mod cc {
 
             let size = common::align_to(offset, align);
             if size != self.size.0 || align != self.align {
-                let mut err = sess.diags.error(
+                let mut err = Diagnostic::error(
                     "unexpected struct layout",
                     self.span
                         .label("this struct does not have a standard C layout"),
@@ -365,7 +364,7 @@ pub mod cc {
                         align, self.align
                     ));
                 }
-                err.emit();
+                err.emit(&sess.diags);
                 return false;
             }
 

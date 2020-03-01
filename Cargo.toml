@@ -9,8 +9,8 @@ edition = "2018"
 [dependencies]
 clang = { version = "0.23.0", features = ["clang_8_0"] }
 thiserror = "1.0.9"
-codespan = "0.7.0"
-codespan-reporting = "0.7.0"
+codespan = { git = "https://github.com/brendanzab/codespan.git" }
+codespan-reporting = { git = "https://github.com/brendanzab/codespan.git" }
 termcolor = "1.1.0"
 lazy_static = "1.4.0"
 salsa = "0.14.1"

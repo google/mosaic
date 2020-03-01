@@ -36,12 +36,13 @@ impl Span {
     }
 
     pub fn label(&self, message: impl Into<String>) -> Label {
-        Label(imp::Label::new(self.file_id, self.span, message))
+        let range = self.span.start().to_usize()..self.span.end().to_usize();
+        Label(imp::Label::new(self.file_id, range, message))
     }
 }
 
 /// A message associated with a Span.
-pub struct Label(imp::Label);
+pub struct Label(imp::Label<codespan::FileId>);
 
 /// Creates diagnostics and keeps track of statistics for a compile session.
 pub struct DiagnosticsCtx<S: AsRef<str>>(Rc<RefCell<CtxInner<S>>>);
@@ -112,8 +113,8 @@ impl<S: AsRef<str>> DiagnosticsCtx<S> {
 }
 
 #[must_use]
-#[derive(Clone, Debug)]
-pub struct Diagnostic(imp::Diagnostic);
+#[derive(Clone)]
+pub struct Diagnostic(imp::Diagnostic<codespan::FileId>);
 
 impl Diagnostic {
     pub fn bug(message: impl Into<String>, primary_label: Label) -> Diagnostic {
@@ -185,7 +186,7 @@ impl Diagnostic {
 }
 
 /// An ordered list of diagnostics.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default)]
 #[must_use]
 pub struct Diagnostics {
     val: Vec<Diagnostic>,

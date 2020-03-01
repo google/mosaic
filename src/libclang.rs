@@ -1,5 +1,5 @@
 use crate::{
-    diagnostics::{self, Diagnostic, SourceFileMap, Span},
+    diagnostics::{self, err, ok, Diagnostic, Outcome, SourceFileMap, Span},
     ir::cc::{self, *},
     util::DisplayName,
     Session,
@@ -17,14 +17,14 @@ pub(crate) mod db;
 
 pub type Error = SourceError;
 
-pub fn parse_and_lower(sess: &Session, filename: &PathBuf) -> Result<cc::Module, Error> {
+pub fn parse_and_lower(sess: &Session, filename: &PathBuf) -> Result<Outcome<cc::Module>, Error> {
     let clang = Clang::new().unwrap();
     let index = clang::Index::new(&clang, false, true);
     let tu = configure(index.parser(filename)).parse()?;
     Ok(lower(sess, tu))
 }
 
-pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> cc::Module {
+pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> Outcome<cc::Module> {
     let module = LowerCtx::new(sess, &tu).lower();
     module
 }
@@ -115,7 +115,7 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower(&mut self) -> cc::Module {
+    fn lower(&mut self) -> Outcome<cc::Module> {
         //let mut visitor = AstVisitor::new(&self);
         let mut exports = vec![];
         for ent in self.tu.get_entity().get_children() {
@@ -127,8 +127,9 @@ impl<'tu> LowerCtx<'tu> {
         }
 
         let mut mdl = cc::Module::new();
+        let mut outcome = ok(());
         for (name, export) in exports {
-            match export {
+            outcome = outcome.then(|_| match export {
                 Export::Decl(decl_ref) => self.lower_decl(name, decl_ref, &mut mdl),
                 Export::Type(ty) => {
                     println!("{} = {:?}", name, ty);
@@ -138,6 +139,7 @@ impl<'tu> LowerCtx<'tu> {
                             .unwrap() // TODO hack
                             .get_template_argument_types()
                     );
+                    ok(())
                 }
                 Export::TemplateType(t) => {
                     println!("{} = {:?}", name, t);
@@ -157,11 +159,12 @@ impl<'tu> LowerCtx<'tu> {
                             _ => println!("  unknown child {:?}", child),
                         }
                     }
+                    ok(())
                 }
-            }
+            });
         }
 
-        mdl
+        outcome.then(|_| ok(mdl))
     }
 
     fn handle_rust_export(&mut self, ns: Entity<'tu>, exports: &mut Vec<(Path, Export<'tu>)>) {
@@ -189,7 +192,12 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower_decl(&mut self, name: Path, decl_ref: Entity<'tu>, mdl: &mut cc::Module) {
+    fn lower_decl(
+        &mut self,
+        name: Path,
+        decl_ref: Entity<'tu>,
+        mdl: &mut cc::Module,
+    ) -> Outcome<()> {
         let overloads = decl_ref.get_overloaded_declarations().unwrap();
         assert_eq!(overloads.len(), 1);
         let ent = overloads[0];
@@ -200,39 +208,48 @@ impl<'tu> LowerCtx<'tu> {
         }
 
         match ent.get_kind() {
-            EntityKind::StructDecl => self.lower_struct(name, ent, mdl),
+            EntityKind::StructDecl => self.lower_struct(name, ent).then(|st| {
+                if let Some(st) = st {
+                    mdl.add_struct(st);
+                }
+                ok(())
+            }),
             //other => eprintln!("{}: Unsupported type {:?}", name, other),
-            other => Diagnostic::error(
-                format!("unsupported item type {:?}", other),
-                self.span(ent).label("only structs are supported"),
-            )
-            .emit(&self.sess.diags),
+            other => err(
+                (),
+                Diagnostic::error(
+                    format!("unsupported item type {:?}", other),
+                    self.span(ent).label("only structs are supported"),
+                ),
+            ),
         }
     }
 
-    fn lower_struct(&mut self, name: Path, ent: Entity<'tu>, mdl: &mut cc::Module) {
+    fn lower_struct(&mut self, name: Path, ent: Entity<'tu>) -> Outcome<Option<cc::Struct>> {
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
-            Diagnostic::error(
-                "unsupported type",
-                self.span(ent).label("only POD structs are supported"),
-            )
-            .emit(&self.sess.diags);
-            return;
+            return err(
+                None,
+                Diagnostic::error(
+                    "unsupported type",
+                    self.span(ent).label("only POD structs are supported"),
+                ),
+            );
         }
 
         // Check for incomplete types in one place.
         // After that, alignof and every field offset should succeed.
         let size = match ty.get_sizeof() {
             Ok(size) => size.try_into().expect("size too big"),
-            Err(err) => {
-                Diagnostic::error(
-                    "incomplete or dependent type",
-                    self.span(ent).label("only complete types can be exported"),
-                )
-                .with_note(err.description())
-                .emit(&self.sess.diags);
-                return;
+            Err(e) => {
+                return err(
+                    None,
+                    Diagnostic::error(
+                        "incomplete or dependent type",
+                        self.span(ent).label("only complete types can be exported"),
+                    )
+                    .with_note(e.description()),
+                );
             }
         };
         let align = ty.get_alignof().unwrap().try_into().expect("align too big");
@@ -264,26 +281,26 @@ impl<'tu> LowerCtx<'tu> {
                 .expect("offset too big");
             // TODO put this in a helper
             if offset % 8 != 0 {
-                Diagnostic::error(
-                    "bitfields are not supported",
-                    self.span(field)
-                        .label("only fields at byte offsets are supported"),
-                )
-                .emit(&self.sess.diags);
-                return;
+                return err(
+                    None,
+                    Diagnostic::error(
+                        "bitfields are not supported",
+                        self.span(field)
+                            .label("only fields at byte offsets are supported"),
+                    ),
+                );
             }
             offsets.push(offset / 8);
         }
 
-        let lowered = cc::Struct {
+        ok(Some(cc::Struct {
             name: name.clone(),
             fields,
             offsets,
             size: cc::Size::new(size),
             align: cc::Align::new(align),
             span: self.span(ent),
-        };
-        mdl.add_struct(lowered);
+        }))
     }
 
     fn span(&mut self, ent: Entity<'tu>) -> Span {

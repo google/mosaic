@@ -38,12 +38,13 @@ pub(crate) fn parse_and_lower(sess: &Session, src: &str, expected: Vec<&str>) ->
     let index = clang::Index::new(&CLANG, true, true);
     let tu = parse(&index, src);
     let ir = libclang::lower(sess, tu);
-    let rust_ir = ir.to_rust(sess);
+    let rust_ir = ir.then(|ir| ir.to_rust(sess));
 
-    let errs = sess.diags.get_test();
+    let (mdl, errs) = rust_ir.split();
     assert_eq!(
-        expected, errs,
+        expected,
+        errs.iter().map(|diag| diag.message()).collect::<Vec<_>>(),
         "did not get the expected set of lowering errors"
     );
-    rust_ir
+    mdl
 }

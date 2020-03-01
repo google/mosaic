@@ -8,7 +8,7 @@
 //! converting between IRs contains explicit checks that the semantics in one
 //! language IR can be represented in the other.
 
-use crate::diagnostics::{Diagnostic, Span};
+use crate::diagnostics::{err, ok, Diagnostic, Outcome, Span};
 use crate::Session;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
@@ -174,16 +174,12 @@ pub mod cc {
     }
 
     impl Module {
-        pub fn check(&self) {
-            for st in &self.structs {
-                st.check();
-            }
-        }
-
-        pub fn to_rust(&self, sess: &Session) -> rs::Module {
-            rs::Module {
-                structs: self.structs.iter().map(|s| s.to_rust(sess)).collect(),
-            }
+        pub fn to_rust(&self, sess: &Session) -> Outcome<rs::Module> {
+            self.structs
+                .iter()
+                .map(|s| s.to_rust(sess))
+                .collect::<Outcome<Vec<_>>>()
+                .then(|structs| ok(rs::Module { structs }))
         }
     }
 
@@ -292,11 +288,7 @@ pub mod cc {
     }
 
     impl Struct {
-        fn check(&self) {
-            // TODO
-        }
-
-        pub fn to_rust(&self, sess: &Session) -> rs::Struct {
+        pub fn to_rust(&self, sess: &Session) -> Outcome<rs::Struct> {
             let fields = self
                 .fields
                 .iter()
@@ -306,19 +298,20 @@ pub mod cc {
                     span: f.span.clone(),
                 })
                 .collect::<Vec<_>>();
-            self.check_offsets(sess, &fields);
-            rs::Struct {
-                name: self.name.clone(),
-                fields,
-                offsets: self.offsets.clone(),
-                repr: rs::Repr::C,
-                size: self.size,
-                align: self.align,
-                span: self.span.clone(),
-            }
+            self.check_offsets(sess, &fields).then(|()| {
+                ok(rs::Struct {
+                    name: self.name.clone(),
+                    fields,
+                    offsets: self.offsets.clone(),
+                    repr: rs::Repr::C,
+                    size: self.size,
+                    align: self.align,
+                    span: self.span.clone(),
+                })
+            })
         }
 
-        fn check_offsets(&self, sess: &Session, fields: &Vec<rs::Field>) -> bool {
+        fn check_offsets(&self, _sess: &Session, fields: &Vec<rs::Field>) -> Outcome<()> {
             let mut offset = 0;
             let mut align = self.align;
             assert_eq!(self.fields.len(), self.offsets.len());
@@ -328,18 +321,19 @@ pub mod cc {
 
                 // Here's where we could add padding, if we wanted to.
                 if offset != self.offsets[idx] {
-                    Diagnostic::error(
-                        "unexpected field offset",
-                        field
-                            .span
-                            .label("this field was not at the expected offset"),
-                    )
-                    .with_note(format!(
-                        "expected an offset of {}, but the offset is {}",
-                        offset, self.offsets[idx]
-                    ))
-                    .emit(&sess.diags);
-                    return false;
+                    return err(
+                        (),
+                        Diagnostic::error(
+                            "unexpected field offset",
+                            field
+                                .span
+                                .label("this field was not at the expected offset"),
+                        )
+                        .with_note(format!(
+                            "expected an offset of {}, but the offset is {}",
+                            offset, self.offsets[idx]
+                        )),
+                    );
                 }
 
                 offset += field.ty.size().0;
@@ -347,28 +341,27 @@ pub mod cc {
 
             let size = common::align_to(offset, align);
             if size != self.size.0 || align != self.align {
-                let mut err = Diagnostic::error(
+                let mut diag = Diagnostic::error(
                     "unexpected struct layout",
                     self.span
                         .label("this struct does not have a standard C layout"),
                 );
                 if size != self.size.0 {
-                    err = err.with_note(format!(
+                    diag = diag.with_note(format!(
                         "expected a size of {}, but the size is {}",
                         size, self.size.0
                     ));
                 }
                 if align != self.align {
-                    err = err.with_note(format!(
+                    diag = diag.with_note(format!(
                         "expected an alignment of {}, but the alignment is {}",
                         align, self.align
                     ));
                 }
-                err.emit(&sess.diags);
-                return false;
+                return err((), diag);
             }
 
-            true
+            ok(())
         }
     }
 }

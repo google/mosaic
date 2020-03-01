@@ -42,9 +42,11 @@ fn main() -> Result<(), libclang::Error> {
     let sess = Session::new();
     let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
     let module = libclang::parse_and_lower(&sess, &filename.into())?;
-    module.check();
-    let rs_module = module.to_rust(&sess);
-    codegen::perform_codegen(&sess, &rs_module);
-    // TODO: check sess.diags.has_errors()
+    let rs_module = module.then(|m| m.to_rust(&sess));
+    let errs = match rs_module.val() {
+        Ok(rs_module) => codegen::perform_codegen(&sess, &rs_module).errs(),
+        Err(errs) => errs,
+    };
+    errs.emit(&sess.diags);
     Ok(())
 }

@@ -8,7 +8,14 @@
 use codespan::{self, Files};
 use codespan_reporting::diagnostic as imp;
 use codespan_reporting::term;
-use std::{cell::RefCell, collections::HashMap, fmt::Debug, hash::Hash, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    fmt::Debug,
+    hash::Hash,
+    iter::{FromIterator, IntoIterator},
+    rc::Rc,
+};
 use termcolor::{self, ColorChoice};
 
 pub use codespan::FileId;
@@ -105,6 +112,7 @@ impl<S: AsRef<str>> DiagnosticsCtx<S> {
 }
 
 #[must_use]
+#[derive(Clone, Debug)]
 pub struct Diagnostic(imp::Diagnostic);
 
 impl Diagnostic {
@@ -169,6 +177,169 @@ impl Diagnostic {
             .secondary_labels
             .extend(seconadry_labels.into_iter().map(|l| l.0));
         self
+    }
+
+    pub fn message(&self) -> &str {
+        &self.0.message
+    }
+}
+
+/// An ordered list of diagnostics.
+#[derive(Clone, Default, Debug)]
+#[must_use]
+pub struct Diagnostics {
+    val: Vec<Diagnostic>,
+}
+impl Diagnostics {
+    /// Adds a diagnostic.
+    pub fn add(&mut self, diag: Diagnostic) {
+        self.val.push(diag);
+    }
+
+    /// Combines diagnostics from `self` and `second` in order.
+    ///
+    /// This is useful when combining diagnostics from a query result with those
+    /// from another operation, for example.
+    ///
+    /// The conventional way to call this method is using UFCS, e.g.
+    ///
+    /// ```
+    /// Diagnostics::merge(&first, &second)
+    /// ```
+    ///
+    /// but it can be useful to call as a method when chaining multiple merges.
+    pub fn merge(&self, second: &Diagnostics) -> Diagnostics {
+        // One day we can optimize the data structure for this case, instead of
+        // cloning. We'll probably use Arcs, but optimize for the empty case.
+        Diagnostics {
+            val: self.val.iter().chain(second.val.iter()).cloned().collect(),
+        }
+    }
+
+    /// Consumes `other`, adding all diagnostics to `self`.
+    pub fn append(&mut self, mut other: Diagnostics) {
+        self.val.append(&mut other.val);
+    }
+
+    pub fn emit<S: AsRef<str>>(self, ctx: &DiagnosticsCtx<S>) {
+        for diag in self.val {
+            diag.emit(ctx);
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
+        self.val.iter()
+    }
+}
+impl From<Diagnostic> for Diagnostics {
+    fn from(err: Diagnostic) -> Self {
+        Diagnostics { val: vec![err] }
+    }
+}
+impl From<Diagnostics> for Vec<Diagnostic> {
+    fn from(diags: Diagnostics) -> Self {
+        diags.val
+    }
+}
+
+/// A value, plus any diagnostics that occurred while computing the value.
+#[must_use]
+pub struct Outcome<T> {
+    val: T,
+    err: Diagnostics,
+}
+impl<T> Outcome<T> {
+    pub fn from_ok(val: T) -> Outcome<T> {
+        Outcome {
+            val,
+            err: Diagnostics::default(),
+        }
+    }
+
+    pub fn from_err(val: T, err: Diagnostic) -> Outcome<T> {
+        Outcome {
+            val,
+            err: err.into(),
+        }
+    }
+
+    pub fn is_ok(&self) -> bool {
+        self.err.val.is_empty()
+    }
+
+    pub fn as_ref(&self) -> Outcome<&T> {
+        Outcome {
+            val: &self.val,
+            err: self.err.clone(),
+        }
+    }
+
+    pub fn val(self) -> Result<T, Diagnostics> {
+        if self.is_ok() {
+            Ok(self.val)
+        } else {
+            Err(self.err)
+        }
+    }
+
+    pub fn skip_errs(self) -> T {
+        self.val
+    }
+
+    pub fn errs(self) -> Diagnostics {
+        self.err
+    }
+
+    pub fn split(self) -> (T, Diagnostics) {
+        (self.val, self.err)
+    }
+
+    pub fn then<R>(self, f: impl FnOnce(T) -> Outcome<R>) -> Outcome<R> {
+        let outcome = f(self.val);
+        Outcome {
+            val: outcome.val,
+            err: Diagnostics::merge(&self.err, &outcome.err),
+        }
+    }
+}
+
+pub fn ok<T>(val: T) -> Outcome<T> {
+    Outcome::from_ok(val)
+}
+
+pub fn err<T>(val: T, err: Diagnostic) -> Outcome<T> {
+    Outcome::from_err(val, err)
+}
+
+impl<A, B> FromIterator<Outcome<A>> for Outcome<B>
+where
+    B: FromIterator<A>,
+{
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = Outcome<A>>,
+    {
+        let mut errs = Diagnostics::default();
+        let vals = iter.into_iter().map(|oc| {
+            errs.append(oc.err);
+            oc.val
+        });
+        Outcome {
+            val: B::from_iter(vals),
+            err: errs,
+        }
+    }
+}
+
+impl<T> From<(T, Diagnostics)> for Outcome<T> {
+    fn from(x: (T, Diagnostics)) -> Self {
+        Outcome { val: x.0, err: x.1 }
+    }
+}
+
+impl From<Diagnostics> for Outcome<()> {
+    fn from(err: Diagnostics) -> Self {
+        Outcome { val: (), err }
     }
 }
 

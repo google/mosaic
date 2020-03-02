@@ -274,12 +274,22 @@ impl Diagnostic {
 
 /// An ordered list of diagnostics.
 // TODO: panic if a Diagnostic[s] is dropped without ever being emitted
-#[derive(Clone, Default)]
+#[derive(Clone)]
 #[must_use]
 pub struct Diagnostics {
     val: Vec<Diagnostic>,
 }
 impl Diagnostics {
+    fn new() -> Diagnostics {
+        Diagnostics { val: vec![] }
+    }
+
+    pub fn build(f: impl FnOnce(&mut Diagnostics)) -> Diagnostics {
+        let mut diags = Diagnostics::new();
+        f(&mut diags);
+        diags
+    }
+
     /// Adds a diagnostic.
     pub fn add(&mut self, diag: Diagnostic) {
         self.val.push(diag);
@@ -341,7 +351,7 @@ impl<T> Outcome<T> {
     pub fn from_ok(val: T) -> Outcome<T> {
         Outcome {
             val,
-            err: Diagnostics::default(),
+            err: Diagnostics::new(),
         }
     }
 
@@ -408,7 +418,7 @@ where
     where
         I: IntoIterator<Item = Outcome<A>>,
     {
-        let mut errs = Diagnostics::default();
+        let mut errs = Diagnostics::new();
         let vals = iter.into_iter().map(|oc| {
             errs.append(oc.err);
             oc.val

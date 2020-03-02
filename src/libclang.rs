@@ -184,29 +184,30 @@ impl<'tu> LowerCtx<'tu> {
         ns: Entity<'tu>,
         exports: &mut Vec<(Path, Export<'tu>)>,
     ) -> Outcome<()> {
-        let mut diags = Diagnostics::default();
-        for decl in ns.get_children() {
-            println!("{:?}", decl);
-            let name = Path::from(decl.get_name().unwrap());
-            match decl.get_kind() {
-                EntityKind::UsingDeclaration => {
-                    exports.push((name, Export::Decl(decl.get_reference().unwrap())))
+        Diagnostics::build(|diags| {
+            for decl in ns.get_children() {
+                println!("{:?}", decl);
+                let name = Path::from(decl.get_name().unwrap());
+                match decl.get_kind() {
+                    EntityKind::UsingDeclaration => {
+                        exports.push((name, Export::Decl(decl.get_reference().unwrap())))
+                    }
+                    EntityKind::TypeAliasDecl => exports.push((
+                        name,
+                        Export::Type(decl.get_typedef_underlying_type().unwrap()),
+                    )),
+                    EntityKind::TypeAliasTemplateDecl => {
+                        exports.push((name, Export::TemplateType(decl)))
+                    }
+                    _ => diags.add(Diagnostic::error(
+                        "invalid rust_export item",
+                        self.span(decl)
+                            .label("only using declarations are allowed here"),
+                    )),
                 }
-                EntityKind::TypeAliasDecl => exports.push((
-                    name,
-                    Export::Type(decl.get_typedef_underlying_type().unwrap()),
-                )),
-                EntityKind::TypeAliasTemplateDecl => {
-                    exports.push((name, Export::TemplateType(decl)))
-                }
-                _ => diags.add(Diagnostic::error(
-                    "invalid rust_export item",
-                    self.span(decl)
-                        .label("only using declarations are allowed here"),
-                )),
             }
-        }
-        diags.into()
+        })
+        .into()
     }
 
     fn lower_decl(

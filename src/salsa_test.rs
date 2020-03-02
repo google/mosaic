@@ -30,9 +30,9 @@ trait Test {
 //    }))
 //}
 
-//fn parse_file(path: &std::path::Path) -> Arc<AstFile> {
+//fn parse_file(path: &std::path::Path) -> Arc<AstTu> {
 //    let index = index();
-//    Arc::new(AstFile::new(index, |i| {
+//    Arc::new(AstTu::new(index, |i| {
 //        let parser = i.index.parser(path);
 //        parser.parse().unwrap()
 //    }))

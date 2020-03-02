@@ -16,17 +16,48 @@ mod libclang;
 mod salsa_test;
 
 use crate::diagnostics::DiagnosticsCtx;
+use salsa;
 use std::env;
+
+use libclang::File;
+
+#[salsa::database(
+    libclang::db::AstMethodsStorage,
+    diagnostics::db::FileInternerStorage,
+    diagnostics::db::BasicFileCacheStorage
+)]
+pub struct Database {
+    runtime: salsa::Runtime<Database>,
+}
+
+impl salsa::Database for Database {
+    fn salsa_runtime(&self) -> &salsa::Runtime<Database> {
+        &self.runtime
+    }
+    fn salsa_runtime_mut(&mut self) -> &mut salsa::Runtime<Database> {
+        &mut self.runtime
+    }
+}
+
+impl Database {
+    pub fn new() -> Database {
+        Database {
+            runtime: salsa::Runtime::default(),
+        }
+    }
+}
 
 pub struct Session {
     // TODO: opts
-    diags: DiagnosticsCtx<String>,
+    diags: DiagnosticsCtx,
+    db: Database,
 }
 
 impl Session {
     pub fn new() -> Self {
         Session {
             diags: DiagnosticsCtx::new(),
+            db: Database::new(),
         }
     }
 
@@ -34,6 +65,7 @@ impl Session {
     pub(crate) fn test() -> Self {
         Session {
             diags: DiagnosticsCtx::test(),
+            db: Database::new(),
         }
     }
 }
@@ -47,6 +79,6 @@ fn main() -> Result<(), libclang::Error> {
         Ok(rs_module) => codegen::perform_codegen(&sess, &rs_module).errs(),
         Err(errs) => errs,
     };
-    errs.emit(&sess.diags);
+    errs.emit(&sess.db, &sess.diags);
     Ok(())
 }

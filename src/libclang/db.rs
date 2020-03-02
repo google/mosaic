@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use super::{AstKind, Export};
-use crate::ir;
+use crate::{diagnostics, ir};
 use std::cmp::{Eq, PartialEq};
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
@@ -12,13 +12,13 @@ pub trait AstMethods {
     #[salsa::input]
     fn parse_result(&self) -> FullParseResult;
 
-    fn cc_ir_from_parse(&self) -> Arc<ir::cc::Module>;
+    fn cc_ir_from_src(&self) -> Arc<ir::cc::Module>;
 
     #[salsa::interned]
     fn intern_ast_path(&self, path: AstPath) -> AstPathId;
 }
 
-fn cc_ir_from_parse(_db: &impl AstMethods) -> Arc<ir::cc::Module> {
+fn cc_ir_from_src(_db: &impl AstMethods) -> Arc<ir::cc::Module> {
     todo!()
 }
 
@@ -38,45 +38,52 @@ rental! {
         use super::*;
 
         #[rental(covariant, debug)]
-        pub(super) struct AstIndex {
+        pub(super) struct Index {
             clang: Arc<clang::Clang>,
             index: clang::Index<'clang>,
         }
 
         #[rental(debug)]
-        pub(super) struct AstFile {
+        pub(super) struct Tu {
             #[subrental = 2]
-            index: Arc<AstIndex>,
+            index: Arc<Index>,
             tu: clang::TranslationUnit<'index_1>,
         }
 
         #[rental(clone, debug)]
-        pub(super) struct AstEntity {
+        pub(super) struct File {
             #[subrental = 3]
-            file: Arc<AstFile>,
-            ent: clang::Entity<'file_2>,
+            tu: Arc<Tu>,
+            file: clang::source::File<'tu_2>,
+        }
+
+        #[rental(clone, debug)]
+        pub(super) struct Entity {
+            #[subrental = 3]
+            tu: Arc<Tu>,
+            ent: clang::Entity<'tu_2>,
         }
 
         #[rental(clone, debug)]
         pub(super) struct FullParseResult {
             #[subrental = 3]
-            file: Arc<AstFile>,
-            result: ParseResult<'file_2>,
+            tu: Arc<Tu>,
+            result: ParseResult<'tu_2>,
         }
     }
 }
 
 #[derive(Clone)]
-pub struct AstIndex(Arc<rent::AstIndex>);
-impl AstIndex {
-    pub fn new(clang: Arc<clang::Clang>) -> Self {
-        AstIndex(Arc::new(rent::AstIndex::new(clang, |cl| {
+struct Index(Arc<rent::Index>);
+impl Index {
+    fn new(clang: Arc<clang::Clang>) -> Self {
+        Index(Arc::new(rent::Index::new(clang, |cl| {
             clang::Index::new(&*cl, false, false)
         })))
     }
 
-    pub fn parse(self, path: impl Into<PathBuf>) -> AstFile {
-        AstFile(Arc::new(rent::AstFile::new(self.0, |i| {
+    fn parse(self, path: impl Into<PathBuf>) -> AstTu {
+        AstTu(Arc::new(rent::Tu::new(self.0, |i| {
             let parser = i.index.parser(path);
             parser.parse().unwrap()
         })))
@@ -84,13 +91,42 @@ impl AstIndex {
 }
 
 #[derive(Clone)]
-pub struct AstFile(Arc<rent::AstFile>);
-impl AstFile {
+struct AstTu(Arc<rent::Tu>);
+impl AstTu {
     pub fn entity(self) -> AstEntity {
-        AstEntity(rent::AstEntity::new(self.0, |file| file.tu.get_entity()))
+        AstEntity(rent::Entity::new(self.0, |tu| tu.tu.get_entity()))
     }
 
     // maybe just stop here, with with_entity()?
+}
+
+#[derive(Clone, Debug)]
+pub struct AstFile(Arc<rent::File>);
+impl PartialEq for AstFile {
+    fn eq(&self, other: &AstFile) -> bool {
+        self.0.rent(|f1| other.0.rent(|f2| f1 == f2))
+    }
+}
+impl Eq for AstFile {}
+impl Hash for AstFile {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.rent(|f| f.hash(state));
+    }
+}
+impl diagnostics::File for AstFile {
+    fn name(&self) -> String {
+        self.0.rent(|f| {
+            f.get_path()
+                .as_path()
+                .to_str()
+                .expect("path was not valid UTF-8")
+                .into()
+        })
+    }
+
+    fn contents(&self) -> String {
+        self.0.rent(|f| f.get_contents().unwrap())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -110,7 +146,7 @@ pub struct FullParseResult(Arc<rent::FullParseResult>);
 // the read query.
 // The query will also return diagnostics.
 #[derive(Clone)]
-pub struct AstEntity(rent::AstEntity);
+pub struct AstEntity(rent::Entity);
 impl AstEntity {
     pub fn map(mut self, f: impl FnOnce(clang::Entity<'_>) -> clang::Entity<'_>) -> Self {
         self.0.rent_mut(|ent| *ent = f(*ent));

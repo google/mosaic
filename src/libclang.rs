@@ -1,13 +1,12 @@
 use crate::{
-    diagnostics::{self, err, ok, Diagnostic, Outcome, SourceFileMap, Span},
+    diagnostics::{self, err, ok, Diagnostic, Diagnostics, Outcome, Span},
     ir::cc::{self, *},
     util::DisplayName,
     Session,
 };
 use clang::{
-    self,
-    source::{File, SourceRange},
-    Accessibility, Clang, Entity, EntityKind, Parser, SourceError, TranslationUnit, Type, TypeKind,
+    self, source::SourceRange, Accessibility, Clang, Entity, EntityKind, Parser, SourceError,
+    TranslationUnit, Type, TypeKind,
 };
 use std::convert::TryInto;
 use std::error::Error as _;
@@ -84,7 +83,7 @@ impl<'tu> Export<'tu> {
     }
 }
 
-impl<'tu> diagnostics::File<String> for File<'tu> {
+impl<'tu> diagnostics::File for clang::source::File<'tu> {
     fn name(&self) -> String {
         self.get_path()
             .as_path()
@@ -98,10 +97,24 @@ impl<'tu> diagnostics::File<String> for File<'tu> {
     }
 }
 
+// Temporary solution.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct File {
+    name: String,
+    contents: String,
+}
+impl diagnostics::File for File {
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+    fn contents(&self) -> String {
+        self.contents.clone()
+    }
+}
+
 struct LowerCtx<'tu> {
     sess: &'tu Session,
     tu: &'tu TranslationUnit<'tu>,
-    source_map: SourceFileMap<File<'tu>, String>,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
@@ -110,24 +123,23 @@ impl<'tu> LowerCtx<'tu> {
         LowerCtx {
             sess,
             tu,
-            source_map: SourceFileMap::<File<'tu>, String>::new(&sess.diags),
             //visible: vec![],
         }
     }
 
     fn lower(&mut self) -> Outcome<cc::Module> {
         //let mut visitor = AstVisitor::new(&self);
+        let mut outcome = ok(());
         let mut exports = vec![];
         for ent in self.tu.get_entity().get_children() {
             if let EntityKind::Namespace = ent.get_kind() {
                 if let Some("rust_export") = ent.get_name().as_deref() {
-                    self.handle_rust_export(ent, &mut exports);
+                    outcome = outcome.then(|_| self.handle_rust_export(ent, &mut exports));
                 }
             }
         }
 
         let mut mdl = cc::Module::new();
-        let mut outcome = ok(());
         for (name, export) in exports {
             outcome = outcome.then(|_| match export {
                 Export::Decl(decl_ref) => self.lower_decl(name, decl_ref, &mut mdl),
@@ -167,7 +179,12 @@ impl<'tu> LowerCtx<'tu> {
         outcome.then(|_| ok(mdl))
     }
 
-    fn handle_rust_export(&mut self, ns: Entity<'tu>, exports: &mut Vec<(Path, Export<'tu>)>) {
+    fn handle_rust_export(
+        &mut self,
+        ns: Entity<'tu>,
+        exports: &mut Vec<(Path, Export<'tu>)>,
+    ) -> Outcome<()> {
+        let mut diags = Diagnostics::default();
         for decl in ns.get_children() {
             println!("{:?}", decl);
             let name = Path::from(decl.get_name().unwrap());
@@ -182,14 +199,14 @@ impl<'tu> LowerCtx<'tu> {
                 EntityKind::TypeAliasTemplateDecl => {
                     exports.push((name, Export::TemplateType(decl)))
                 }
-                _ => Diagnostic::error(
+                _ => diags.add(Diagnostic::error(
                     "invalid rust_export item",
                     self.span(decl)
                         .label("only using declarations are allowed here"),
-                )
-                .emit(&self.sess.diags),
+                )),
             }
         }
+        diags.into()
     }
 
     fn lower_decl(
@@ -321,7 +338,14 @@ impl<'tu> LowerCtx<'tu> {
             (Some(f), Some(g)) if f == g => f,
             _ => return None,
         };
-        let file_id = self.source_map.lookup(&file);
+        // TODO: Make performance not awful =)
+        use diagnostics::db::FileInterner;
+        use diagnostics::File as _;
+        let file = File {
+            name: file.name(),
+            contents: file.contents(),
+        };
+        let file_id = self.sess.db.intern_file(file);
         Some(Span::new(file_id, start.offset, end.offset))
     }
 }

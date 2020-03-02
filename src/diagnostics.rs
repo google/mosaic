@@ -5,12 +5,11 @@
 // Right now this is implemented on top of codespan, but fixes a few things I
 // don't like about the API.
 
-use codespan::{self, Files};
+use codespan;
 use codespan_reporting::diagnostic as imp;
 use codespan_reporting::term;
 use std::{
     cell::RefCell,
-    collections::HashMap,
     fmt::Debug,
     hash::Hash,
     iter::{FromIterator, IntoIterator},
@@ -18,7 +17,91 @@ use std::{
 };
 use termcolor::{self, ColorChoice};
 
-pub use codespan::FileId;
+pub mod db {
+    use super::*;
+    use codespan_reporting::files::{Line, SimpleFile};
+    use salsa::{self, InternKey};
+    use std::sync::Arc;
+
+    intern_key!(FileId);
+    impl FileId {
+        pub fn lookup(&self, db: &impl FileInterner) -> crate::File {
+            db.lookup_intern_file(*self)
+        }
+    }
+    impl PartialOrd for FileId {
+        fn partial_cmp(&self, other: &FileId) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for FileId {
+        fn cmp(&self, other: &FileId) -> std::cmp::Ordering {
+            self.as_intern_id()
+                .as_usize()
+                .cmp(&other.as_intern_id().as_usize())
+        }
+    }
+
+    #[salsa::query_group(FileInternerStorage)]
+    pub trait FileInterner
+    where
+        // This code should stay agnostic to the actual file type.
+        crate::File: File,
+    {
+        #[salsa::interned]
+        fn intern_file(&self, file: crate::File) -> FileId;
+    }
+
+    /// Since the Files trait (and libclang) copy the entire file contents every
+    /// time we request them, we need a way of caching those contents. We then
+    /// wrap them in SimpleFile, which creates an index of the start of every
+    /// line.
+    #[derive(Debug, Clone)]
+    pub struct BasicFile(SimpleFile<Arc<str>, Arc<str>>);
+    impl PartialEq for BasicFile {
+        fn eq(&self, other: &BasicFile) -> bool {
+            self.0.origin() == other.0.origin() && self.0.source() == other.0.source()
+        }
+    }
+    impl Eq for BasicFile {}
+
+    /// Cache for [`BasicFile`]. Should not be used outside of the `diagnostics` module.
+    #[salsa::query_group(BasicFileCacheStorage)]
+    pub trait BasicFileCache: FileInterner {
+        fn basic_file(&self, id: FileId) -> Arc<BasicFile>;
+    }
+    fn basic_file(db: &impl FileInterner, id: FileId) -> Arc<BasicFile> {
+        let file = id.lookup(db);
+        Arc::new(BasicFile(SimpleFile::new(
+            file.name().into(),
+            file.contents().into(),
+        )))
+    }
+
+    /// Adapter between salsa, BasicFile, and the Files trait.
+    pub(super) struct FilesWrapper<'db, DB: BasicFileCache>(pub(super) &'db DB);
+    impl<'db, DB: BasicFileCache> codespan_reporting::files::Files<'_> for FilesWrapper<'db, DB> {
+        type FileId = FileId;
+        type Origin = Arc<str>;
+        type LineSource = String;
+
+        fn origin(&self, id: FileId) -> Option<Self::Origin> {
+            Some(self.0.basic_file(id).0.origin().clone())
+        }
+
+        fn line(&self, id: FileId, line_idx: usize) -> Option<Line<String>> {
+            self.0.basic_file(id).0.line((), line_idx)
+        }
+
+        fn line_index(&self, id: FileId, byte_idx: usize) -> Option<usize> {
+            self.0.basic_file(id).0.line_index((), byte_idx)
+        }
+    }
+}
+
+//pub use codespan::FileId;
+
+pub use db::FileId;
 
 /// The source code associated with an object.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -42,13 +125,12 @@ impl Span {
 }
 
 /// A message associated with a Span.
-pub struct Label(imp::Label<codespan::FileId>);
+pub struct Label(imp::Label<FileId>);
 
 /// Creates diagnostics and keeps track of statistics for a compile session.
-pub struct DiagnosticsCtx<S: AsRef<str>>(Rc<RefCell<CtxInner<S>>>);
+pub struct DiagnosticsCtx(Rc<RefCell<CtxInner>>);
 
-struct CtxInner<Source: AsRef<str>> {
-    files: Files<Source>,
+struct CtxInner {
     counts: Counts,
     mode: Mode,
 }
@@ -68,10 +150,9 @@ struct Counts {
     helps: Count,
 }
 
-impl<S: AsRef<str>> DiagnosticsCtx<S> {
+impl DiagnosticsCtx {
     pub fn new() -> Self {
         let inner = CtxInner {
-            files: Files::new(),
             counts: Counts::default(),
             mode: Mode::Term {
                 writer: termcolor::StandardStream::stderr(ColorChoice::Auto),
@@ -83,7 +164,6 @@ impl<S: AsRef<str>> DiagnosticsCtx<S> {
     #[cfg(test)]
     pub(crate) fn test() -> Self {
         let inner = CtxInner {
-            files: Files::new(),
             counts: Counts::default(),
             mode: Mode::Test { errs: vec![] },
         };
@@ -112,9 +192,19 @@ impl<S: AsRef<str>> DiagnosticsCtx<S> {
     }
 }
 
+/// A representation of a source file to be used with `SourceFileMap`.
+pub trait File: Clone + Eq + Hash + Debug {
+    /// Returns the name of the file (often, the path to it). This will be used
+    /// in diagnostics messages.
+    fn name(&self) -> String;
+
+    /// Returns the contents of the file.
+    fn contents(&self) -> String;
+}
+
 #[must_use]
 #[derive(Clone)]
-pub struct Diagnostic(imp::Diagnostic<codespan::FileId>);
+pub struct Diagnostic(imp::Diagnostic<db::FileId>);
 
 impl Diagnostic {
     pub fn bug(message: impl Into<String>, primary_label: Label) -> Diagnostic {
@@ -137,13 +227,8 @@ impl Diagnostic {
         Diagnostic(imp::Diagnostic::new_help(message, primary_label.0))
     }
 
-    pub fn emit<S: AsRef<str>>(self, ctx: &DiagnosticsCtx<S>) {
-        let CtxInner {
-            mode,
-            files,
-            counts,
-            ..
-        } = &mut *ctx.0.borrow_mut();
+    pub fn emit(self, db: &'_ impl db::BasicFileCache, ctx: &DiagnosticsCtx) {
+        let CtxInner { mode, counts, .. } = &mut *ctx.0.borrow_mut();
         match self.0.severity {
             imp::Severity::Bug => counts.bugs += 1,
             imp::Severity::Error => counts.errors += 1,
@@ -152,8 +237,10 @@ impl Diagnostic {
             imp::Severity::Help => counts.helps += 1,
         }
         match mode {
-            Mode::Term { writer } => term::emit(writer, &Default::default(), files, &self.0)
-                .expect("failed to emit diagnostic"),
+            Mode::Term { writer } => {
+                term::emit(writer, &Default::default(), &db::FilesWrapper(db), &self.0)
+                    .expect("failed to emit diagnostic")
+            }
             Mode::Test { errs } => errs.push(self.0.message),
         }
     }
@@ -186,6 +273,7 @@ impl Diagnostic {
 }
 
 /// An ordered list of diagnostics.
+// TODO: panic if a Diagnostic[s] is dropped without ever being emitted
 #[derive(Clone, Default)]
 #[must_use]
 pub struct Diagnostics {
@@ -222,9 +310,9 @@ impl Diagnostics {
         self.val.append(&mut other.val);
     }
 
-    pub fn emit<S: AsRef<str>>(self, ctx: &DiagnosticsCtx<S>) {
+    pub fn emit(self, db: &impl db::BasicFileCache, ctx: &DiagnosticsCtx) {
         for diag in self.val {
-            diag.emit(ctx);
+            diag.emit(db, ctx);
         }
     }
 
@@ -341,42 +429,5 @@ impl<T> From<(T, Diagnostics)> for Outcome<T> {
 impl From<Diagnostics> for Outcome<()> {
     fn from(err: Diagnostics) -> Self {
         Outcome { val: (), err }
-    }
-}
-
-/// A representation of a source file to be used with `SourceFileMap`.
-pub trait File<Source: AsRef<str>>: Clone + Eq + Hash + Debug {
-    /// Returns the name of the file (often, the path to it). This will be used
-    /// in diagnostics messages.
-    fn name(&self) -> String;
-
-    /// Returns a handle used to get the contents of the file.
-    ///
-    /// `Source::as_ref()` will only be invoked once the contents are actually
-    /// needed.
-    fn contents(&self) -> Source;
-}
-
-/// Assigns Files to FileIds and keeps track of their mapping.
-///
-/// You may have more than one SourceFileMap for a given DiagnosticsCtx.
-pub struct SourceFileMap<F: File<S>, S: AsRef<str>> {
-    ctx: DiagnosticsCtx<S>,
-    map: HashMap<F, FileId>,
-}
-
-impl<F: File<S>, S: AsRef<str>> SourceFileMap<F, S> {
-    pub fn new(ctx: &DiagnosticsCtx<S>) -> Self {
-        SourceFileMap {
-            ctx: ctx.clone(),
-            map: HashMap::new(),
-        }
-    }
-
-    /// Retrieves the FileId for the File, or creates one if it does not exist.
-    pub fn lookup(&mut self, file: &F) -> FileId {
-        let SourceFileMap { ctx, map } = self;
-        *map.entry(file.clone())
-            .or_insert_with(|| ctx.0.borrow_mut().files.add(file.name(), file.contents()))
     }
 }

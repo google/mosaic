@@ -10,7 +10,7 @@ use codespan_reporting::diagnostic as imp;
 use codespan_reporting::term;
 use std::{
     cell::RefCell,
-    fmt::Debug,
+    fmt::{self, Debug},
     hash::Hash,
     iter::{FromIterator, IntoIterator},
     rc::Rc,
@@ -80,7 +80,7 @@ pub mod db {
 
     /// Adapter between salsa, BasicFile, and the Files trait.
     pub(super) struct FilesWrapper<'db, DB: BasicFileCache>(pub(super) &'db DB);
-    impl<'db, DB: BasicFileCache> codespan_reporting::files::Files<'_> for FilesWrapper<'db, DB> {
+    impl<'a, DB: BasicFileCache> codespan_reporting::files::Files<'a> for FilesWrapper<'a, DB> {
         type FileId = FileId;
         type Origin = Arc<str>;
         type LineSource = String;
@@ -90,7 +90,11 @@ pub mod db {
         }
 
         fn line(&self, id: FileId, line_idx: usize) -> Option<Line<String>> {
-            self.0.basic_file(id).0.line((), line_idx)
+            self.0.basic_file(id).0.line((), line_idx).map(|line| Line {
+                start: line.start,
+                number: line.number,
+                source: line.source.to_owned(),
+            })
         }
 
         fn line_index(&self, id: FileId, byte_idx: usize) -> Option<usize> {
@@ -120,7 +124,7 @@ impl Span {
 
     pub fn label(&self, message: impl Into<String>) -> Label {
         let range = self.span.start().to_usize()..self.span.end().to_usize();
-        Label(imp::Label::new(self.file_id, range, message))
+        Label(imp::Label::primary(self.file_id, range).with_message(message))
     }
 }
 
@@ -203,28 +207,55 @@ pub trait File: Clone + Eq + Hash + Debug {
 }
 
 #[must_use]
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Diagnostic(imp::Diagnostic<db::FileId>);
+
+impl fmt::Debug for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO
+        write!(f, "Diagnostic({})", self.message())
+    }
+}
 
 impl Diagnostic {
     pub fn bug(message: impl Into<String>, primary_label: Label) -> Diagnostic {
-        Diagnostic(imp::Diagnostic::new_bug(message, primary_label.0))
+        Diagnostic(
+            imp::Diagnostic::bug()
+                .with_message(message)
+                .with_labels(vec![primary_label.0]),
+        )
     }
 
     pub fn error(message: impl Into<String>, primary_label: Label) -> Diagnostic {
-        Diagnostic(imp::Diagnostic::new_error(message, primary_label.0))
+        Diagnostic(
+            imp::Diagnostic::error()
+                .with_message(message)
+                .with_labels(vec![primary_label.0]),
+        )
     }
 
     pub fn warn(message: impl Into<String>, primary_label: Label) -> Diagnostic {
-        Diagnostic(imp::Diagnostic::new_warning(message, primary_label.0))
+        Diagnostic(
+            imp::Diagnostic::warning()
+                .with_message(message)
+                .with_labels(vec![primary_label.0]),
+        )
     }
 
     pub fn info(message: impl Into<String>, primary_label: Label) -> Diagnostic {
-        Diagnostic(imp::Diagnostic::new_note(message, primary_label.0))
+        Diagnostic(
+            imp::Diagnostic::note()
+                .with_message(message)
+                .with_labels(vec![primary_label.0]),
+        )
     }
 
     pub fn help(message: impl Into<String>, primary_label: Label) -> Diagnostic {
-        Diagnostic(imp::Diagnostic::new_help(message, primary_label.0))
+        Diagnostic(
+            imp::Diagnostic::help()
+                .with_message(message)
+                .with_labels(vec![primary_label.0]),
+        )
     }
 
     pub fn emit(self, db: &'_ impl db::BasicFileCache, ctx: &DiagnosticsCtx) {
@@ -256,13 +287,13 @@ impl Diagnostic {
     }
 
     pub fn with_label(mut self, secondary_label: Label) -> Diagnostic {
-        self.0.secondary_labels.push(secondary_label.0);
+        self.0.labels.push(secondary_label.0);
         self
     }
 
     pub fn with_labels(mut self, seconadry_labels: impl IntoIterator<Item = Label>) -> Diagnostic {
         self.0
-            .secondary_labels
+            .labels
             .extend(seconadry_labels.into_iter().map(|l| l.0));
         self
     }
@@ -274,7 +305,7 @@ impl Diagnostic {
 
 /// An ordered list of diagnostics.
 // TODO: panic if a Diagnostic[s] is dropped without ever being emitted
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[must_use]
 pub struct Diagnostics {
     val: Vec<Diagnostic>,
@@ -342,6 +373,7 @@ impl From<Diagnostics> for Vec<Diagnostic> {
 }
 
 /// A value, plus any diagnostics that occurred while computing the value.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[must_use]
 pub struct Outcome<T> {
     val: T,

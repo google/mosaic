@@ -57,15 +57,15 @@ dependencies = [
 [[package]]
 name = "codespan"
 version = "0.8.0"
-source = "git+https://github.com/brendanzab/codespan.git#24dfb64a3af1703a1e31b1ca43c9de7df5b0aad8"
+source = "git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq#41e912bd46f8fb92779e4b266f997dfe1bb5f593"
 dependencies = [
- "codespan-reporting 0.8.0 (git+https://github.com/brendanzab/codespan.git)",
+ "codespan-reporting 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
 ]
 
 [[package]]
 name = "codespan-reporting"
 version = "0.8.0"
-source = "git+https://github.com/brendanzab/codespan.git#24dfb64a3af1703a1e31b1ca43c9de7df5b0aad8"
+source = "git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq#41e912bd46f8fb92779e4b266f997dfe1bb5f593"
 dependencies = [
  "termcolor 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "unicode-width 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -386,8 +386,8 @@ name = "peasy"
 version = "0.1.0"
 dependencies = [
  "clang 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "codespan 0.8.0 (git+https://github.com/brendanzab/codespan.git)",
- "codespan-reporting 0.8.0 (git+https://github.com/brendanzab/codespan.git)",
+ "codespan 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
+ "codespan-reporting 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "owning_ref 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rental 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -493,8 +493,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum clang 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)" = "edaa418fdc81a329f3c8258a4e8776f7d2c31682147c5bda1c5c37ab8e818114"
 "checksum clang-sys 0.28.1 (registry+https://github.com/rust-lang/crates.io-index)" = "81de550971c976f176130da4b2978d3b524eaa0fd9ac31f3ceb5ae1231fb4853"
 "checksum cloudabi 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "ddfc5b9aa5d4507acaf872de71051dfd0e309860e88966e1051e462a077aac4f"
-"checksum codespan 0.8.0 (git+https://github.com/brendanzab/codespan.git)" = "<none>"
-"checksum codespan-reporting 0.8.0 (git+https://github.com/brendanzab/codespan.git)" = "<none>"
+"checksum codespan 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)" = "<none>"
+"checksum codespan-reporting 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)" = "<none>"
 "checksum crossbeam 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)" = "69323bff1fb41c635347b8ead484a5ca6c3f11914d784170b158d8449ab07f8e"
 "checksum crossbeam-channel 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "acec9a3b0b3559f15aee4f90746c4e5e293b701c0f7d3925d24e01645267b68c"
 "checksum crossbeam-deque 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)" = "c3aa945d63861bfe624b55d153a39684da1e8c0bc8fba932f7ee3a3c16cea3ca"

@@ -500,8 +500,8 @@ mod tests {
 
     #[test]
     fn pod_layout() {
-        let sess = Session::test();
-        let ir = cpp_lower!(&sess, {
+        let mut sess = Session::test();
+        let ir = cpp_lower!(sess, {
             struct Pod {
                 int a, b;
                 char c, d;
@@ -524,8 +524,8 @@ mod tests {
 
     #[test]
     fn packed() {
-        let sess = Session::test();
-        cpp_lower!(&sess, {
+        let mut sess = Session::test();
+        cpp_lower!(sess, {
             struct __attribute__((__packed__)) Pod {
                 int a, b;
                 char c, d;
@@ -541,8 +541,8 @@ mod tests {
 
     #[test]
     fn bitfields() {
-        let sess = Session::test();
-        cpp_lower!(&sess, {
+        let mut sess = Session::test();
+        cpp_lower!(sess, {
             struct Pod {
                 int a : 3, b : 2;
             };
@@ -557,8 +557,8 @@ mod tests {
     #[test]
     #[should_panic] // TODO
     fn nested_struct() {
-        let sess = Session::test();
-        let ir = cpp_lower!(&sess, {
+        let mut sess = Session::test();
+        let ir = cpp_lower!(sess, {
             struct Foo {
                 int a, b;
             };

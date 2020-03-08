@@ -17,15 +17,21 @@ pub(crate) mod db;
 
 pub type Error = SourceError;
 
-#[cfg(test)]
-pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> Outcome<cc::Module> {
-    get_exports(&sess.db, &tu).then(|exports| LowerCtx::new(&sess.db).lower(&exports))
-}
-
 pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::FullParseResult {
     let clang = Arc::new(Clang::new().unwrap());
+    parse_with(clang, sess, |index| {
+        let parser = index.parser(filename);
+        configure(parser).parse().unwrap()
+    })
+}
+
+pub(crate) fn parse_with(
+    clang: Arc<Clang>,
+    sess: &Session,
+    parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
+) -> db::FullParseResult {
     let index = db::Index::new(clang, false, false);
-    let tu = index.parse(filename, configure);
+    let tu = index.parse_with(parse_fn);
     tu.build_parse_result(|tu| {
         get_exports(&sess.db, tu).then(|exports| {
             ok(db::ParseResultData {

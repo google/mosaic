@@ -1,10 +1,12 @@
+use crate::libclang::db::AstMethods;
 use crate::{ir, libclang, Session};
 use clang::{self, TranslationUnit, Unsaved};
 use lazy_static::lazy_static;
 use std::path::Path;
+use std::sync::Arc;
 
 lazy_static! {
-    pub(crate) static ref CLANG: clang::Clang = clang::Clang::new().unwrap();
+    pub(crate) static ref CLANG: Arc<clang::Clang> = Arc::new(clang::Clang::new().unwrap());
 }
 
 macro_rules! cpp_parse {
@@ -13,10 +15,10 @@ macro_rules! cpp_parse {
 
 macro_rules! cpp_lower {
     { $sess:expr, $src:tt => [ $( $errs:expr ),* ] } => {
-        $crate::test_util::parse_and_lower($sess, stringify!($src), vec![$($errs),*])
+        $crate::test_util::parse_and_lower(&mut $sess, stringify!($src), vec![$($errs),*])
     };
     { $sess:expr, $src:tt } => {
-        $crate::test_util::parse_and_lower($sess, stringify!($src), vec![])
+        $crate::test_util::parse_and_lower(&mut $sess, stringify!($src), vec![])
     };
 }
 
@@ -33,12 +35,18 @@ pub(crate) fn parse<'c>(index: &'c clang::Index, src: &str) -> TranslationUnit<'
         .expect("test input failed to parse")
 }
 
-pub(crate) fn parse_and_lower(sess: &Session, src: &str, expected: Vec<&str>) -> ir::rs::Module {
+pub(crate) fn parse_and_lower(
+    sess: &mut Session,
+    src: &str,
+    expected: Vec<&str>,
+) -> ir::rs::Module {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
-    let index = clang::Index::new(&CLANG, true, true);
-    let tu = parse(&index, src);
-    let ir = libclang::lower(sess, tu);
-    let rust_ir = ir.then(|ir| ir.to_rust(sess));
+
+    let tu = libclang::parse_with(CLANG.clone(), &sess, |index| parse(index, src));
+    sess.db.set_parse_result(tu);
+
+    let ir = &sess.db.cc_ir_from_src();
+    let rust_ir = ir.to_ref().then(|ir| ir.to_rust(sess));
 
     let (mdl, errs) = rust_ir.split();
     assert_eq!(

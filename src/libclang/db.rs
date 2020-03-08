@@ -7,7 +7,6 @@ use crate::{
 use std::cmp::{Eq, PartialEq};
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 #[salsa::query_group(AstMethodsStorage)]
@@ -85,14 +84,12 @@ impl Index {
         })))
     }
 
-    pub fn parse(
+    pub fn parse_with(
         self,
-        path: impl Into<PathBuf>,
-        config: impl FnOnce(clang::Parser) -> clang::Parser,
+        parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
     ) -> AstTu {
-        AstTu(Arc::new(rent::Tu::new(self.0, |i| {
-            let parser = i.index.parser(path);
-            config(parser).parse().unwrap()
+        AstTu(Arc::new(rent::Tu::new(self.0, |rent_index| {
+            parse_fn(&rent_index.index)
         })))
     }
 }

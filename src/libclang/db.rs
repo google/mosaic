@@ -1,6 +1,9 @@
 #![allow(dead_code)]
-use super::{AstKind, Export};
-use crate::{diagnostics, ir};
+use super::{AstKind, Export, Path};
+use crate::{
+    diagnostics::{self, Outcome},
+    ir,
+};
 use std::cmp::{Eq, PartialEq};
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
@@ -8,18 +11,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[salsa::query_group(AstMethodsStorage)]
-pub trait AstMethods {
+pub trait AstMethods: diagnostics::db::FileInterner {
     #[salsa::input]
     fn parse_result(&self) -> FullParseResult;
 
-    fn cc_ir_from_src(&self) -> Arc<ir::cc::Module>;
+    fn cc_ir_from_src(&self) -> Arc<Outcome<ir::cc::Module>>;
 
     #[salsa::interned]
     fn intern_ast_path(&self, path: AstPath) -> AstPathId;
 }
 
-fn cc_ir_from_src(_db: &impl AstMethods) -> Arc<ir::cc::Module> {
-    todo!()
+fn cc_ir_from_src(db: &impl AstMethods) -> Arc<Outcome<ir::cc::Module>> {
+    Arc::new(super::lower_ast(db, db.parse_result()))
 }
 
 intern_key!(AstPathId);
@@ -74,27 +77,38 @@ rental! {
 }
 
 #[derive(Clone)]
-struct Index(Arc<rent::Index>);
+pub struct Index(Arc<rent::Index>);
 impl Index {
-    fn new(clang: Arc<clang::Clang>) -> Self {
+    pub fn new(clang: Arc<clang::Clang>, exclude: bool, diagnostics: bool) -> Self {
         Index(Arc::new(rent::Index::new(clang, |cl| {
-            clang::Index::new(&*cl, false, false)
+            clang::Index::new(&*cl, exclude, diagnostics)
         })))
     }
 
-    fn parse(self, path: impl Into<PathBuf>) -> AstTu {
+    pub fn parse(
+        self,
+        path: impl Into<PathBuf>,
+        config: impl FnOnce(clang::Parser) -> clang::Parser,
+    ) -> AstTu {
         AstTu(Arc::new(rent::Tu::new(self.0, |i| {
             let parser = i.index.parser(path);
-            parser.parse().unwrap()
+            config(parser).parse().unwrap()
         })))
     }
 }
 
 #[derive(Clone)]
-struct AstTu(Arc<rent::Tu>);
+pub struct AstTu(Arc<rent::Tu>);
 impl AstTu {
     pub fn entity(self) -> AstEntity {
         AstEntity(rent::Entity::new(self.0, |tu| tu.tu.get_entity()))
+    }
+
+    pub fn build_parse_result(
+        self,
+        f: impl for<'tu> FnOnce(&'tu clang::TranslationUnit<'tu>) -> ParseResult<'tu>,
+    ) -> FullParseResult {
+        FullParseResult(Arc::new(rent::FullParseResult::new(self.0, |tu| f(&tu.tu))))
     }
 
     // maybe just stop here, with with_entity()?
@@ -130,14 +144,24 @@ impl diagnostics::File for AstFile {
 }
 
 #[derive(Clone, Debug)]
-pub struct ParseResult<'tu> {
-    root: clang::Entity<'tu>,
-    exports: Vec<Export<'tu>>,
-    diagnostics: clang::diagnostic::Diagnostic<'tu>,
+pub struct ParseResultData<'tu> {
+    pub root: clang::Entity<'tu>,
+    pub exports: Vec<(Path, Export<'tu>)>,
+    pub diagnostics: Vec<clang::diagnostic::Diagnostic<'tu>>,
 }
+
+pub type ParseResult<'tu> = Outcome<ParseResultData<'tu>>;
 
 #[derive(Clone, Debug)]
 pub struct FullParseResult(Arc<rent::FullParseResult>);
+impl FullParseResult {
+    pub fn with<R>(
+        &self,
+        f: impl for<'tu> FnOnce(&'tu clang::TranslationUnit<'tu>, &Outcome<ParseResultData<'tu>>) -> R,
+    ) -> R {
+        self.0.rent_all(|inner| f(inner.tu.tu, inner.result))
+    }
+}
 
 // Make this (for the root Entity of the TU) an "input" to salsa.
 // Actually, use the "lazy read" pattern. Hold a map of translation units in our
@@ -153,7 +177,20 @@ impl AstEntity {
         self
     }
 
-    // stop here with with_entity(), a wrapper for rent()
+    pub fn with<T>(&self, f: impl FnOnce(clang::Entity<'_>) -> T) -> T {
+        self.0.rent(|ent| f(*ent))
+    }
+
+    pub fn file(&self) -> Option<AstFile> {
+        // Safety: Safe because file lives as long as we do.
+        let file: clang::source::File<'_> = unsafe { self.0.all_erased().ent.get_file() }?;
+        let tu = self.0.clone().into_head();
+        Some(AstFile(Arc::new(rent::File::new(tu, |_tu| {
+            // Safety: Lifetime extension is safe because the File has the same lifetime as tu.
+            let file: clang::source::File<'_> = unsafe { std::mem::transmute(file) };
+            file
+        }))))
+    }
 }
 
 type ExportId = u32;
@@ -183,7 +220,9 @@ impl AstPath {
                     steps.push(step);
                     cur = parent.lookup(db);
                 }
-                AstPathInner::Root(id) => break parse.exports[id as usize].get(),
+                AstPathInner::Root(id) => {
+                    break parse.as_ref().skip_errs().exports[id as usize].1.get()
+                }
             }
         };
 

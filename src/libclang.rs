@@ -1,5 +1,5 @@
 use crate::{
-    diagnostics::{self, err, ok, Diagnostic, Diagnostics, Outcome, Span},
+    diagnostics::{self, db::FileInterner, err, ok, Diagnostic, Diagnostics, Outcome, Span},
     ir::cc::{self, *},
     util::DisplayName,
     Session,
@@ -11,21 +11,30 @@ use clang::{
 use std::convert::TryInto;
 use std::error::Error as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub(crate) mod db;
 
 pub type Error = SourceError;
 
-pub fn parse_and_lower(sess: &Session, filename: &PathBuf) -> Result<Outcome<cc::Module>, Error> {
-    let clang = Clang::new().unwrap();
-    let index = clang::Index::new(&clang, false, true);
-    let tu = configure(index.parser(filename)).parse()?;
-    Ok(lower(sess, tu))
+#[cfg(test)]
+pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> Outcome<cc::Module> {
+    get_exports(&sess.db, &tu).then(|exports| LowerCtx::new(&sess.db).lower(&exports))
 }
 
-pub(crate) fn lower(sess: &Session, tu: TranslationUnit<'_>) -> Outcome<cc::Module> {
-    let module = LowerCtx::new(sess, &tu).lower();
-    module
+pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::FullParseResult {
+    let clang = Arc::new(Clang::new().unwrap());
+    let index = db::Index::new(clang, false, false);
+    let tu = index.parse(filename, configure);
+    tu.build_parse_result(|tu| {
+        get_exports(&sess.db, tu).then(|exports| {
+            ok(db::ParseResultData {
+                root: tu.get_entity(),
+                exports,
+                diagnostics: tu.get_diagnostics(),
+            })
+        })
+    })
 }
 
 pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
@@ -68,7 +77,7 @@ impl<'tu> From<clang::Type<'tu>> for AstKind<'tu> {
 }
 
 #[derive(Clone, Debug)]
-enum Export<'tu> {
+pub enum Export<'tu> {
     Decl(Entity<'tu>),
     Type(Type<'tu>),
     TemplateType(Entity<'tu>),
@@ -112,107 +121,122 @@ impl diagnostics::File for File {
     }
 }
 
-struct LowerCtx<'tu> {
-    sess: &'tu Session,
+fn lower_ast(db: &impl FileInterner, parse: db::FullParseResult) -> Outcome<cc::Module> {
+    parse.with(|_tu, outcome| {
+        outcome
+            .clone()
+            .then(|parse| LowerCtx::new(db).lower(&parse.exports))
+    })
+}
+
+fn get_exports<'tu>(
+    db: &impl FileInterner,
     tu: &'tu TranslationUnit<'tu>,
+) -> Outcome<Vec<(Path, Export<'tu>)>> {
+    let mut outcome = ok(());
+    let mut exports = vec![];
+    for ent in tu.get_entity().get_children() {
+        if let EntityKind::Namespace = ent.get_kind() {
+            if let Some("rust_export") = ent.get_name().as_deref() {
+                outcome = outcome.then(|_| handle_rust_export(db, ent, &mut exports));
+            }
+        }
+    }
+    outcome.then(|()| ok(exports))
+}
+
+fn handle_rust_export<'tu>(
+    db: &impl FileInterner,
+    ns: Entity<'tu>,
+    exports: &mut Vec<(Path, Export<'tu>)>,
+) -> Outcome<()> {
+    Diagnostics::build(|diags| {
+        for decl in ns.get_children() {
+            println!("{:?}", decl);
+            let name = Path::from(decl.get_name().unwrap());
+            match decl.get_kind() {
+                EntityKind::UsingDeclaration => {
+                    exports.push((name, Export::Decl(decl.get_reference().unwrap())))
+                }
+                EntityKind::TypeAliasDecl => exports.push((
+                    name,
+                    Export::Type(decl.get_typedef_underlying_type().unwrap()),
+                )),
+                EntityKind::TypeAliasTemplateDecl => {
+                    exports.push((name, Export::TemplateType(decl)))
+                }
+                _ => diags.add(Diagnostic::error(
+                    "invalid rust_export item",
+                    span(db, decl).label("only using declarations are allowed here"),
+                )),
+            }
+        }
+    })
+    .into()
+}
+
+struct LowerCtx<'tu, DB: FileInterner> {
+    db: &'tu DB,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
-impl<'tu> LowerCtx<'tu> {
-    fn new(sess: &'tu Session, tu: &'tu TranslationUnit<'tu>) -> Self {
+impl<'tu, DB: FileInterner> LowerCtx<'tu, DB> {
+    fn new(db: &'tu DB) -> Self {
         LowerCtx {
-            sess,
-            tu,
+            db,
             //visible: vec![],
         }
     }
 
-    fn lower(&mut self) -> Outcome<cc::Module> {
+    fn lower(&mut self, exports: &Vec<(Path, Export<'tu>)>) -> Outcome<cc::Module> {
         //let mut visitor = AstVisitor::new(&self);
         let mut outcome = ok(());
-        let mut exports = vec![];
-        for ent in self.tu.get_entity().get_children() {
-            if let EntityKind::Namespace = ent.get_kind() {
-                if let Some("rust_export") = ent.get_name().as_deref() {
-                    outcome = outcome.then(|_| self.handle_rust_export(ent, &mut exports));
-                }
-            }
-        }
-
         let mut mdl = cc::Module::new();
         for (name, export) in exports {
-            outcome = outcome.then(|_| match export {
-                Export::Decl(decl_ref) => self.lower_decl(name, decl_ref, &mut mdl),
-                Export::Type(ty) => {
-                    println!("{} = {:?}", name, ty);
-                    println!(
-                        "  {:?}",
-                        ty.get_elaborated_type()
-                            .unwrap() // TODO hack
-                            .get_template_argument_types()
-                    );
-                    ok(())
-                }
-                Export::TemplateType(t) => {
-                    println!("{} = {:?}", name, t);
-                    for child in t.get_children() {
-                        match child.get_kind() {
-                            EntityKind::TemplateTypeParameter => {
-                                println!("  type parameter {}", child.get_name().unwrap())
-                            }
-                            EntityKind::TypeAliasDecl => println!(
-                                "  type alias => {:?} => {:?}",
-                                child.get_typedef_underlying_type().unwrap(),
-                                child
-                                    .get_typedef_underlying_type()
-                                    .unwrap()
-                                    .get_declaration(),
-                            ),
-                            _ => println!("  unknown child {:?}", child),
-                        }
-                    }
-                    ok(())
-                }
-            });
+            outcome = outcome.then(|()| self.lower_export(name, export, &mut mdl));
         }
-
-        outcome.then(|_| ok(mdl))
+        outcome.then(|()| ok(mdl))
     }
 
-    fn handle_rust_export(
-        &mut self,
-        ns: Entity<'tu>,
-        exports: &mut Vec<(Path, Export<'tu>)>,
-    ) -> Outcome<()> {
-        Diagnostics::build(|diags| {
-            for decl in ns.get_children() {
-                println!("{:?}", decl);
-                let name = Path::from(decl.get_name().unwrap());
-                match decl.get_kind() {
-                    EntityKind::UsingDeclaration => {
-                        exports.push((name, Export::Decl(decl.get_reference().unwrap())))
-                    }
-                    EntityKind::TypeAliasDecl => exports.push((
-                        name,
-                        Export::Type(decl.get_typedef_underlying_type().unwrap()),
-                    )),
-                    EntityKind::TypeAliasTemplateDecl => {
-                        exports.push((name, Export::TemplateType(decl)))
-                    }
-                    _ => diags.add(Diagnostic::error(
-                        "invalid rust_export item",
-                        self.span(decl)
-                            .label("only using declarations are allowed here"),
-                    )),
-                }
+    fn lower_export(&mut self, name: &Path, export: &Export<'tu>, mdl: &mut Module) -> Outcome<()> {
+        match export {
+            Export::Decl(decl_ref) => self.lower_decl(name, *decl_ref, mdl),
+            Export::Type(ty) => {
+                println!("{} = {:?}", name, ty);
+                println!(
+                    "  {:?}",
+                    ty.get_elaborated_type()
+                        .unwrap() // TODO hack
+                        .get_template_argument_types()
+                );
+                ok(())
             }
-        })
-        .into()
+            Export::TemplateType(t) => {
+                println!("{} = {:?}", name, t);
+                for child in t.get_children() {
+                    match child.get_kind() {
+                        EntityKind::TemplateTypeParameter => {
+                            println!("  type parameter {}", child.get_name().unwrap())
+                        }
+                        EntityKind::TypeAliasDecl => println!(
+                            "  type alias => {:?} => {:?}",
+                            child.get_typedef_underlying_type().unwrap(),
+                            child
+                                .get_typedef_underlying_type()
+                                .unwrap()
+                                .get_declaration(),
+                        ),
+                        _ => println!("  unknown child {:?}", child),
+                    }
+                }
+                ok(())
+            }
+        }
     }
 
     fn lower_decl(
         &mut self,
-        name: Path,
+        name: &Path,
         decl_ref: Entity<'tu>,
         mdl: &mut cc::Module,
     ) -> Outcome<()> {
@@ -243,7 +267,7 @@ impl<'tu> LowerCtx<'tu> {
         }
     }
 
-    fn lower_struct(&mut self, name: Path, ent: Entity<'tu>) -> Outcome<Option<cc::Struct>> {
+    fn lower_struct(&mut self, name: &Path, ent: Entity<'tu>) -> Outcome<Option<cc::Struct>> {
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
             return err(
@@ -321,34 +345,36 @@ impl<'tu> LowerCtx<'tu> {
         }))
     }
 
-    fn span(&mut self, ent: Entity<'tu>) -> Span {
-        self.maybe_span_from_range(ent.get_range())
-            .expect("TODO dummy span")
+    fn span(&self, ent: Entity<'tu>) -> Span {
+        span(self.db, ent)
     }
+}
 
-    fn maybe_span_from_range(&mut self, range: Option<SourceRange<'tu>>) -> Option<Span> {
-        let range = match range {
-            Some(range) => range,
-            None => return None,
-        };
-        let (start, end) = (
-            range.get_start().get_file_location(),
-            range.get_end().get_file_location(),
-        );
-        let file = match (start.file, end.file) {
-            (Some(f), Some(g)) if f == g => f,
-            _ => return None,
-        };
-        // TODO: Make performance not awful =)
-        use diagnostics::db::FileInterner;
-        use diagnostics::File as _;
-        let file = File {
-            name: file.name(),
-            contents: file.contents(),
-        };
-        let file_id = self.sess.db.intern_file(file);
-        Some(Span::new(file_id, start.offset, end.offset))
-    }
+fn span(db: &impl FileInterner, ent: Entity<'_>) -> Span {
+    maybe_span_from_range(db, ent.get_range()).expect("TODO dummy span")
+}
+
+fn maybe_span_from_range(db: &impl FileInterner, range: Option<SourceRange<'_>>) -> Option<Span> {
+    let range = match range {
+        Some(range) => range,
+        None => return None,
+    };
+    let (start, end) = (
+        range.get_start().get_file_location(),
+        range.get_end().get_file_location(),
+    );
+    let file = match (start.file, end.file) {
+        (Some(f), Some(g)) if f == g => f,
+        _ => return None,
+    };
+    // TODO: Make performance not awful =)
+    use diagnostics::File as _;
+    let file = File {
+        name: file.name(),
+        contents: file.contents(),
+    };
+    let file_id = db.intern_file(file);
+    Some(Span::new(file_id, start.offset, end.offset))
 }
 
 trait Lower {

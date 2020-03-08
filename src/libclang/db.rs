@@ -17,6 +17,9 @@ pub trait AstMethods: diagnostics::db::FileInterner {
     fn cc_ir_from_src(&self) -> Arc<Outcome<ir::cc::Module>>;
 
     #[salsa::interned]
+    fn intern_cc_struct(&self, st: ir::cc::Struct) -> ir::cc::StructId;
+
+    #[salsa::interned]
     fn intern_ast_path(&self, path: AstPath) -> AstPathId;
 }
 

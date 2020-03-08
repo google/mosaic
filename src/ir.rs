@@ -16,8 +16,6 @@ use std::{fmt, iter};
 mod common {
     use super::*;
 
-    intern_key!(StructId);
-
     /// A C++ unqualified identifier.
     ///
     /// Examples: `std`, `vector`, or `MyClass`.
@@ -146,12 +144,22 @@ pub mod cc {
     use crate::libclang::db::AstMethods;
     use std::sync::Arc;
 
-    pub use common::{Align, Ident, Offset, Path, Size, StructId};
+    pub use common::{Align, Ident, Offset, Path, Size};
+
+    intern_key!(StructId);
+    impl StructId {
+        pub fn lookup(&self, db: &impl AstMethods) -> Struct {
+            db.lookup_intern_cc_struct(*self)
+        }
+    }
 
     #[salsa::query_group(RsIrStorage)]
     #[salsa::requires(AstMethods)]
     pub trait RsIr {
         fn rs_ir(&self) -> Arc<Outcome<rs::Module>>;
+
+        #[salsa::interned]
+        fn intern_struct(&self, st: rs::Struct) -> rs::StructId;
     }
 
     fn rs_ir(db: &(impl AstMethods + RsIr)) -> Arc<Outcome<rs::Module>> {
@@ -162,7 +170,7 @@ pub mod cc {
     /// representation.
     #[derive(Debug, Eq, PartialEq)]
     pub struct Module {
-        structs: Vec<Struct>,
+        structs: Vec<StructId>,
     }
     impl Module {
         pub fn new() -> Module {
@@ -170,31 +178,33 @@ pub mod cc {
         }
 
         #[allow(dead_code)]
-        pub fn structs(&self) -> impl Iterator<Item = (StructId, &Struct)> {
-            self.structs
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (StructId::new(i as u32 + 1), s))
+        pub fn structs<'a>(
+            &'a self,
+            db: &'a impl AstMethods,
+        ) -> impl Iterator<Item = (StructId, Struct)> + 'a {
+            self.structs.iter().map(move |i| (*i, i.lookup(db)))
         }
 
-        pub fn add_struct(&mut self, st: Struct) -> StructId {
-            let id = StructId::new(self.structs.len() as u32 + 1);
+        pub fn add_struct(&mut self, st: StructId) {
             self.structs.push(st);
-            id
         }
     }
 
     impl Module {
-        pub fn to_rust(&self, db: &impl RsIr) -> Outcome<rs::Module> {
+        pub fn to_rust(&self, db: &(impl RsIr + AstMethods)) -> Outcome<rs::Module> {
             self.structs
                 .iter()
-                .map(|s| s.to_rust(db))
+                .map(|st| {
+                    st.lookup(db)
+                        .to_rust(db)
+                        .then(|rs_st| ok(db.intern_struct(rs_st)))
+                })
                 .collect::<Outcome<Vec<_>>>()
                 .then(|structs| ok(rs::Module { structs }))
         }
     }
 
-    #[derive(Debug, Eq, PartialEq, Clone)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     #[allow(dead_code)]
     pub enum Ty {
         Error,
@@ -257,6 +267,7 @@ pub mod cc {
         }
 
         pub fn to_rust(&self) -> rs::Ty {
+            //use salsa::InternKey;
             use Ty::*;
             match self {
                 Error => rs::Ty::Error,
@@ -276,12 +287,12 @@ pub mod cc {
                 Float => rs::Ty::F32,
                 Double => rs::Ty::F64,
                 Bool => rs::Ty::Bool,
-                Struct(id) => rs::Ty::Struct(*id), // StructIds are preserved
+                Struct(_id) => todo!(),
             }
         }
     }
 
-    #[derive(Debug, Eq, PartialEq)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Struct {
         pub name: Path,
         pub fields: Vec<Field>,
@@ -291,7 +302,7 @@ pub mod cc {
         pub span: Span,
     }
 
-    #[derive(Debug, Clone, Eq, PartialEq)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Field {
         pub name: Ident,
         pub ty: Ty,
@@ -381,19 +392,26 @@ pub mod cc {
 pub mod rs {
     use super::*;
 
-    pub use common::{Align, Ident, Offset, Path, Size, StructId};
+    pub use common::{Align, Ident, Offset, Path, Size};
+
+    intern_key!(StructId);
+    impl StructId {
+        pub fn lookup(&self, db: &impl cc::RsIr) -> Struct {
+            db.lookup_intern_struct(*self)
+        }
+    }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Module {
-        pub(super) structs: Vec<Struct>,
+        pub(super) structs: Vec<StructId>,
     }
 
     impl Module {
-        pub fn structs(&self) -> impl Iterator<Item = (StructId, &Struct)> {
-            self.structs
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (StructId::new(i as u32 + 1), s))
+        pub fn structs<'a>(
+            &'a self,
+            db: &'a impl cc::RsIr,
+        ) -> impl Iterator<Item = (StructId, Struct)> + 'a {
+            self.structs.iter().map(move |i| (*i, i.lookup(db)))
         }
     }
 
@@ -522,7 +540,7 @@ mod tests {
                 using ::Pod;
             }
         });
-        let st = &ir.structs[0];
+        let st = ir.structs[0].lookup(&sess.db);
         assert_eq!(
             st.fields
                 .iter()
@@ -581,7 +599,7 @@ mod tests {
                 using ::Bar;
             }
         });
-        let st = &ir.structs[0];
+        let st = ir.structs[0].lookup(&sess.db);
         assert_eq!(rs::Size::new(12), st.size);
     }
 }

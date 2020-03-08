@@ -114,7 +114,10 @@ impl<'tu> diagnostics::File for clang::source::File<'tu> {
 
 pub type File = db::AstFile;
 
-fn lower_ast(db: &impl FileInterner, parse: db::FullParseResult) -> Outcome<cc::Module> {
+fn lower_ast(
+    db: &(impl FileInterner + db::AstMethods),
+    parse: db::FullParseResult,
+) -> Outcome<cc::Module> {
     parse.with(|_tu, outcome, interner| {
         outcome
             .to_ref()
@@ -170,13 +173,13 @@ fn handle_rust_export<'tu>(
     .into()
 }
 
-struct LowerCtx<'tu, DB: FileInterner> {
+struct LowerCtx<'tu, DB: FileInterner + db::AstMethods> {
     db: &'tu DB,
     interner: &'tu db::FileInterner<'tu>,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
-impl<'tu, DB: FileInterner> LowerCtx<'tu, DB> {
+impl<'tu, DB: FileInterner + db::AstMethods> LowerCtx<'tu, DB> {
     fn new(db: &'tu DB, interner: &'tu db::FileInterner<'tu>) -> Self {
         LowerCtx {
             db,
@@ -249,7 +252,7 @@ impl<'tu, DB: FileInterner> LowerCtx<'tu, DB> {
         match ent.get_kind() {
             EntityKind::StructDecl => self.lower_struct(name, ent).then(|st| {
                 if let Some(st) = st {
-                    mdl.add_struct(st);
+                    mdl.add_struct(self.db.intern_cc_struct(st));
                 }
                 ok(())
             }),

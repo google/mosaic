@@ -6,6 +6,7 @@ macro_rules! intern_key {
         pub struct $name(::salsa::InternId);
 
         impl $name {
+            #[allow(dead_code)]
             pub(super) fn new(v: u32) -> Self {
                 Self(::salsa::InternId::from(v))
             }

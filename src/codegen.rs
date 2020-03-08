@@ -6,7 +6,7 @@ use crate::Session;
 
 pub fn perform_codegen(sess: &Session, mdl: &rs::Module) -> Outcome<()> {
     Diagnostics::build(|diags| {
-        for (_, st) in mdl.structs() {
+        for (_, st) in mdl.structs(&sess.db) {
             let errs = codegen_struct(sess, &st).errs();
             diags.append(errs);
         }

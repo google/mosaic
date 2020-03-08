@@ -398,11 +398,16 @@ impl<T> Outcome<T> {
         self.err.val.is_empty()
     }
 
-    pub fn as_ref(&self) -> Outcome<&T> {
-        Outcome {
+    pub fn as_ref<'a>(&'a self) -> RefOutcome<'a, T> {
+        RefOutcome {
             val: &self.val,
-            err: self.err.clone(),
+            err: &self.err,
         }
+    }
+
+    // Use this when you need to bypass Arc::as_ref.
+    pub fn to_ref<'a>(&'a self) -> RefOutcome<'a, T> {
+        self.as_ref()
     }
 
     pub fn val(self) -> Result<T, Diagnostics> {
@@ -440,6 +445,45 @@ pub fn ok<T>(val: T) -> Outcome<T> {
 
 pub fn err<T>(val: T, err: Diagnostic) -> Outcome<T> {
     Outcome::from_err(val, err)
+}
+
+pub struct RefOutcome<'a, T> {
+    val: &'a T,
+    err: &'a Diagnostics,
+}
+
+impl<'a, T> RefOutcome<'a, T> {
+    pub fn is_ok(&self) -> bool {
+        self.err.val.is_empty()
+    }
+
+    pub fn val(self) -> Result<&'a T, &'a Diagnostics> {
+        if self.is_ok() {
+            Ok(self.val)
+        } else {
+            Err(self.err)
+        }
+    }
+
+    pub fn skip_errs(self) -> &'a T {
+        self.val
+    }
+
+    pub fn errs(self) -> &'a Diagnostics {
+        self.err
+    }
+
+    pub fn split(self) -> (&'a T, &'a Diagnostics) {
+        (self.val, self.err)
+    }
+
+    pub fn then<R>(self, f: impl FnOnce(&'a T) -> Outcome<R>) -> Outcome<R> {
+        let outcome = f(self.val);
+        Outcome {
+            val: outcome.val,
+            err: Diagnostics::merge(&self.err, &outcome.err),
+        }
+    }
 }
 
 impl<A, B> FromIterator<Outcome<A>> for Outcome<B>

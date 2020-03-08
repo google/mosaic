@@ -229,7 +229,7 @@ mod tests {
                 .cloned()
                 .collect::<Vec<_>>(),
             ["std", "vector<bool>", "basic_iterator"]
-                .into_iter()
+                .iter()
                 .copied()
                 .map(Ident::from)
                 .collect::<Vec<_>>()

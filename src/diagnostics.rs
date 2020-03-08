@@ -105,16 +105,16 @@ pub mod db {
 
 //pub use codespan::FileId;
 
-//pub use db::FileId;
+pub use db::FileId;
 
 /// The source code associated with an object.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Span<FileId = db::FileId> {
+pub struct Span {
     file_id: FileId,
     span: codespan::Span,
 }
 
-impl<FileId: Clone> Span<FileId> {
+impl Span {
     pub fn new(file_id: FileId, start_offset: u32, end_offset: u32) -> Self {
         Span {
             file_id,
@@ -122,14 +122,14 @@ impl<FileId: Clone> Span<FileId> {
         }
     }
 
-    pub fn label(&self, message: impl Into<String>) -> Label<FileId> {
+    pub fn label(&self, message: impl Into<String>) -> Label {
         let range = self.span.start().to_usize()..self.span.end().to_usize();
-        Label(imp::Label::primary(self.file_id.clone(), range).with_message(message))
+        Label(imp::Label::primary(self.file_id, range).with_message(message))
     }
 }
 
 /// A message associated with a Span.
-pub struct Label<Id = db::FileId>(imp::Label<Id>);
+pub struct Label(imp::Label<FileId>);
 
 /// Creates diagnostics and keeps track of statistics for a compile session.
 pub struct DiagnosticsCtx(Rc<RefCell<CtxInner>>);
@@ -208,17 +208,17 @@ pub trait File: Clone + Eq + Hash + Debug {
 
 #[must_use]
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Diagnostic<Id = db::FileId>(imp::Diagnostic<Id>);
+pub struct Diagnostic(imp::Diagnostic<db::FileId>);
 
-impl<Id> fmt::Debug for Diagnostic<Id> {
+impl fmt::Debug for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // TODO
         write!(f, "Diagnostic({})", self.message())
     }
 }
 
-impl<Id> Diagnostic<Id> {
-    pub fn bug(message: impl Into<String>, primary_label: Label<Id>) -> Self {
+impl Diagnostic {
+    pub fn bug(message: impl Into<String>, primary_label: Label) -> Diagnostic {
         Diagnostic(
             imp::Diagnostic::bug()
                 .with_message(message)
@@ -226,7 +226,7 @@ impl<Id> Diagnostic<Id> {
         )
     }
 
-    pub fn error(message: impl Into<String>, primary_label: Label<Id>) -> Self {
+    pub fn error(message: impl Into<String>, primary_label: Label) -> Diagnostic {
         Diagnostic(
             imp::Diagnostic::error()
                 .with_message(message)
@@ -234,7 +234,7 @@ impl<Id> Diagnostic<Id> {
         )
     }
 
-    pub fn warn(message: impl Into<String>, primary_label: Label<Id>) -> Self {
+    pub fn warn(message: impl Into<String>, primary_label: Label) -> Diagnostic {
         Diagnostic(
             imp::Diagnostic::warning()
                 .with_message(message)
@@ -242,7 +242,7 @@ impl<Id> Diagnostic<Id> {
         )
     }
 
-    pub fn info(message: impl Into<String>, primary_label: Label<Id>) -> Self {
+    pub fn info(message: impl Into<String>, primary_label: Label) -> Diagnostic {
         Diagnostic(
             imp::Diagnostic::note()
                 .with_message(message)
@@ -250,7 +250,7 @@ impl<Id> Diagnostic<Id> {
         )
     }
 
-    pub fn help(message: impl Into<String>, primary_label: Label<Id>) -> Self {
+    pub fn help(message: impl Into<String>, primary_label: Label) -> Diagnostic {
         Diagnostic(
             imp::Diagnostic::help()
                 .with_message(message)
@@ -258,34 +258,6 @@ impl<Id> Diagnostic<Id> {
         )
     }
 
-    pub fn with_note(mut self, note: impl Into<String>) -> Self {
-        self.0.notes.push(note.into());
-        self
-    }
-
-    pub fn with_notes(mut self, notes: impl IntoIterator<Item = String>) -> Self {
-        self.0.notes.extend(notes);
-        self
-    }
-
-    pub fn with_label(mut self, secondary_label: Label<Id>) -> Self {
-        self.0.labels.push(secondary_label.0);
-        self
-    }
-
-    pub fn with_labels(mut self, seconadry_labels: impl IntoIterator<Item = Label<Id>>) -> Self {
-        self.0
-            .labels
-            .extend(seconadry_labels.into_iter().map(|l| l.0));
-        self
-    }
-
-    pub fn message(&self) -> &str {
-        &self.0.message
-    }
-}
-
-impl Diagnostic<db::FileId> {
     pub fn emit(self, db: &'_ impl db::BasicFileCache, ctx: &DiagnosticsCtx) {
         let CtxInner { mode, counts, .. } = &mut *ctx.0.borrow_mut();
         match self.0.severity {
@@ -303,28 +275,54 @@ impl Diagnostic<db::FileId> {
             Mode::Test { errs } => errs.push(self.0.message),
         }
     }
+
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.0.notes.push(note.into());
+        self
+    }
+
+    pub fn with_notes(mut self, notes: impl IntoIterator<Item = String>) -> Diagnostic {
+        self.0.notes.extend(notes);
+        self
+    }
+
+    pub fn with_label(mut self, secondary_label: Label) -> Diagnostic {
+        self.0.labels.push(secondary_label.0);
+        self
+    }
+
+    pub fn with_labels(mut self, seconadry_labels: impl IntoIterator<Item = Label>) -> Diagnostic {
+        self.0
+            .labels
+            .extend(seconadry_labels.into_iter().map(|l| l.0));
+        self
+    }
+
+    pub fn message(&self) -> &str {
+        &self.0.message
+    }
 }
 
 /// An ordered list of diagnostics.
 // TODO: panic if a Diagnostic[s] is dropped without ever being emitted
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[must_use]
-pub struct Diagnostics<FileId: Clone = db::FileId> {
-    val: Vec<Diagnostic<FileId>>,
+pub struct Diagnostics {
+    val: Vec<Diagnostic>,
 }
-impl<FileId: Clone> Diagnostics<FileId> {
-    fn new() -> Self {
+impl Diagnostics {
+    fn new() -> Diagnostics {
         Diagnostics { val: vec![] }
     }
 
-    pub fn build(f: impl FnOnce(&mut Diagnostics<FileId>)) -> Self {
+    pub fn build(f: impl FnOnce(&mut Diagnostics)) -> Diagnostics {
         let mut diags = Diagnostics::new();
         f(&mut diags);
         diags
     }
 
     /// Adds a diagnostic.
-    pub fn add(&mut self, diag: Diagnostic<FileId>) {
+    pub fn add(&mut self, diag: Diagnostic) {
         self.val.push(diag);
     }
 
@@ -340,7 +338,7 @@ impl<FileId: Clone> Diagnostics<FileId> {
     /// ```
     ///
     /// but it can be useful to call as a method when chaining multiple merges.
-    pub fn merge(&self, second: &Diagnostics<FileId>) -> Diagnostics<FileId> {
+    pub fn merge(&self, second: &Diagnostics) -> Diagnostics {
         // One day we can optimize the data structure for this case, instead of
         // cloning. We'll probably use Arcs, but optimize for the empty case.
         Diagnostics {
@@ -349,48 +347,47 @@ impl<FileId: Clone> Diagnostics<FileId> {
     }
 
     /// Consumes `other`, adding all diagnostics to `self`.
-    pub fn append(&mut self, mut other: Diagnostics<FileId>) {
+    pub fn append(&mut self, mut other: Diagnostics) {
         self.val.append(&mut other.val);
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Diagnostic<FileId>> {
-        self.val.iter()
-    }
-}
-impl<FileId: Clone> From<Diagnostic<FileId>> for Diagnostics<FileId> {
-    fn from(err: Diagnostic<FileId>) -> Self {
-        Diagnostics { val: vec![err] }
-    }
-}
-impl<FileId: Clone> From<Diagnostics<FileId>> for Vec<Diagnostic<FileId>> {
-    fn from(diags: Diagnostics<FileId>) -> Self {
-        diags.val
-    }
-}
-impl Diagnostics<db::FileId> {
     pub fn emit(self, db: &impl db::BasicFileCache, ctx: &DiagnosticsCtx) {
         for diag in self.val {
             diag.emit(db, ctx);
         }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
+        self.val.iter()
+    }
+}
+impl From<Diagnostic> for Diagnostics {
+    fn from(err: Diagnostic) -> Self {
+        Diagnostics { val: vec![err] }
+    }
+}
+impl From<Diagnostics> for Vec<Diagnostic> {
+    fn from(diags: Diagnostics) -> Self {
+        diags.val
     }
 }
 
 /// A value, plus any diagnostics that occurred while computing the value.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[must_use]
-pub struct Outcome<T, FileId: Clone = db::FileId> {
+pub struct Outcome<T> {
     val: T,
-    err: Diagnostics<FileId>,
+    err: Diagnostics,
 }
-impl<T, FileId: Clone> Outcome<T, FileId> {
-    pub fn from_ok(val: T) -> Self {
+impl<T> Outcome<T> {
+    pub fn from_ok(val: T) -> Outcome<T> {
         Outcome {
             val,
             err: Diagnostics::new(),
         }
     }
 
-    pub fn from_err(val: T, err: Diagnostic<FileId>) -> Self {
+    pub fn from_err(val: T, err: Diagnostic) -> Outcome<T> {
         Outcome {
             val,
             err: err.into(),
@@ -401,7 +398,7 @@ impl<T, FileId: Clone> Outcome<T, FileId> {
         self.err.val.is_empty()
     }
 
-    pub fn as_ref<'a>(&'a self) -> RefOutcome<'a, T, FileId> {
+    pub fn as_ref<'a>(&'a self) -> RefOutcome<'a, T> {
         RefOutcome {
             val: &self.val,
             err: &self.err,
@@ -409,11 +406,11 @@ impl<T, FileId: Clone> Outcome<T, FileId> {
     }
 
     // Use this when you need to bypass Arc::as_ref.
-    pub fn to_ref<'a>(&'a self) -> RefOutcome<'a, T, FileId> {
+    pub fn to_ref<'a>(&'a self) -> RefOutcome<'a, T> {
         self.as_ref()
     }
 
-    pub fn val(self) -> Result<T, Diagnostics<FileId>> {
+    pub fn val(self) -> Result<T, Diagnostics> {
         if self.is_ok() {
             Ok(self.val)
         } else {
@@ -425,15 +422,15 @@ impl<T, FileId: Clone> Outcome<T, FileId> {
         self.val
     }
 
-    pub fn errs(self) -> Diagnostics<FileId> {
+    pub fn errs(self) -> Diagnostics {
         self.err
     }
 
-    pub fn split(self) -> (T, Diagnostics<FileId>) {
+    pub fn split(self) -> (T, Diagnostics) {
         (self.val, self.err)
     }
 
-    pub fn then<R>(self, f: impl FnOnce(T) -> Outcome<R, FileId>) -> Outcome<R, FileId> {
+    pub fn then<R>(self, f: impl FnOnce(T) -> Outcome<R>) -> Outcome<R> {
         let outcome = f(self.val);
         Outcome {
             val: outcome.val,
@@ -442,17 +439,17 @@ impl<T, FileId: Clone> Outcome<T, FileId> {
     }
 }
 
-pub fn ok<T, FileId: Clone>(val: T) -> Outcome<T, FileId> {
+pub fn ok<T>(val: T) -> Outcome<T> {
     Outcome::from_ok(val)
 }
 
-pub fn err<T, FileId: Clone>(val: T, err: Diagnostic<FileId>) -> Outcome<T, FileId> {
+pub fn err<T>(val: T, err: Diagnostic) -> Outcome<T> {
     Outcome::from_err(val, err)
 }
 
-pub struct RefOutcome<'a, T, FileId: Clone = db::FileId> {
+pub struct RefOutcome<'a, T> {
     val: &'a T,
-    err: &'a Diagnostics<FileId>,
+    err: &'a Diagnostics,
 }
 
 impl<'a, T> RefOutcome<'a, T> {

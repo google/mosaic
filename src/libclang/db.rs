@@ -103,9 +103,24 @@ impl AstTu {
 
     pub fn build_parse_result(
         self,
-        f: impl for<'tu> FnOnce(&'tu clang::TranslationUnit<'tu>) -> ParseResult<'tu>,
+        f: impl for<'tu, 'intern> FnOnce(
+            &'tu clang::TranslationUnit<'tu>,
+            &'intern FileInterner<'tu>,
+        ) -> ParseResult<'tu>,
     ) -> FullParseResult {
-        FullParseResult(Arc::new(rent::FullParseResult::new(self.0, |tu| f(&tu.tu))))
+        FullParseResult(Arc::new(rent::FullParseResult::new(
+            self.0.clone(),
+            move |tu| {
+                // Safety: This is safe because f must be valid for any lifetime
+                // 'tu, and we are giving it other borrows of lifetime 'tu that are
+                // only valid for as long as the clang::TranslationUnit. Therefore
+                // the lifetime 'tu must be small enough, and f can only intern
+                // the type clang::source::File<'tu> though the FileInterner
+                // interface.
+                let interner = unsafe { FileInterner::new(self.0) };
+                f(&tu.tu, &interner)
+            },
+        )))
     }
 
     // maybe just stop here, with with_entity()?
@@ -149,14 +164,64 @@ pub struct ParseResultData<'tu> {
 
 pub type ParseResult<'tu> = Outcome<ParseResultData<'tu>>;
 
+//pub trait FileInterner<'tu>: Fn(clang::Entity<'tu>) -> diagnostics::db::FileId {}
+//impl<'tu, T> FileInterner<'tu> for T where T: Fn(clang::Entity<'tu>) -> diagnostics::db::FileId {}
+
+mod interner {
+    use super::*;
+    use std::marker::PhantomData;
+
+    pub struct FileInterner<'tu> {
+        tu: Arc<rent::Tu>,
+        phantom: PhantomData<clang::TranslationUnit<'tu>>,
+    }
+    impl<'tu> FileInterner<'tu> {
+        // Only construct this with lifetime parameters that can never be larger
+        // than that of the clang::TranslationUnit.
+        pub(super) unsafe fn new(tu: Arc<rent::Tu>) -> Self {
+            FileInterner {
+                tu,
+                phantom: PhantomData,
+            }
+        }
+
+        pub fn intern_file(
+            &self,
+            db: &impl crate::diagnostics::db::FileInterner,
+            file: clang::source::File<'tu>,
+        ) -> diagnostics::db::FileId {
+            let ast_file = AstFile(Arc::new(rent::File::new(self.tu.clone(), |_tu| unsafe {
+                let file: clang::source::File<'_> = std::mem::transmute(file);
+                file
+            })));
+            db.intern_file(ast_file)
+        }
+    }
+}
+pub use interner::FileInterner;
+
 #[derive(Clone, Debug)]
 pub struct FullParseResult(Arc<rent::FullParseResult>);
 impl FullParseResult {
     pub fn with<R>(
         &self,
-        f: impl for<'tu> FnOnce(&'tu clang::TranslationUnit<'tu>, &Outcome<ParseResultData<'tu>>) -> R,
+        f: impl for<'tu> FnOnce(
+            &'tu clang::TranslationUnit<'tu>,
+            &Outcome<ParseResultData<'tu>>,
+            &'tu FileInterner<'tu>,
+        ) -> R,
     ) -> R {
-        self.0.rent_all(|inner| f(inner.tu.tu, inner.result))
+        self.0.rent_all(|inner| {
+            let tu: Arc<rent::Tu> = rent::FullParseResult::clone(&self.0).into_head();
+            // Safety: This is safe because f must be valid for any lifetime
+            // 'tu, and we are giving it other borrows of lifetime 'tu that are
+            // only valid for as long as the clang::TranslationUnit. Therefore
+            // the lifetime 'tu must be small enough, and f can only intern
+            // the type clang::source::File<'tu> though the FileInterner
+            // interface.
+            let interner = unsafe { FileInterner::new(tu) };
+            f(inner.tu.tu, inner.result, &interner)
+        })
     }
 }
 

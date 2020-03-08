@@ -32,8 +32,8 @@ pub(crate) fn parse_with(
 ) -> db::FullParseResult {
     let index = db::Index::new(clang, false, false);
     let tu = index.parse_with(parse_fn);
-    tu.build_parse_result(|tu| {
-        get_exports(&sess.db, tu).then(|exports| {
+    tu.build_parse_result(|tu, interner| {
+        get_exports(&sess.db, &interner, tu).then(|exports| {
             ok(db::ParseResultData {
                 root: tu.get_entity(),
                 exports,
@@ -112,31 +112,19 @@ impl<'tu> diagnostics::File for clang::source::File<'tu> {
     }
 }
 
-// Temporary solution.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct File {
-    name: String,
-    contents: String,
-}
-impl diagnostics::File for File {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-    fn contents(&self) -> String {
-        self.contents.clone()
-    }
-}
+pub type File = db::AstFile;
 
 fn lower_ast(db: &impl FileInterner, parse: db::FullParseResult) -> Outcome<cc::Module> {
-    parse.with(|_tu, outcome| {
+    parse.with(|_tu, outcome, interner| {
         outcome
-            .clone()
-            .then(|parse| LowerCtx::new(db).lower(&parse.exports))
+            .to_ref()
+            .then(|parse| LowerCtx::new(db, interner).lower(&parse.exports))
     })
 }
 
 fn get_exports<'tu>(
     db: &impl FileInterner,
+    interner: &db::FileInterner<'tu>,
     tu: &'tu TranslationUnit<'tu>,
 ) -> Outcome<Vec<(Path, Export<'tu>)>> {
     let mut outcome = ok(());
@@ -144,7 +132,7 @@ fn get_exports<'tu>(
     for ent in tu.get_entity().get_children() {
         if let EntityKind::Namespace = ent.get_kind() {
             if let Some("rust_export") = ent.get_name().as_deref() {
-                outcome = outcome.then(|_| handle_rust_export(db, ent, &mut exports));
+                outcome = outcome.then(|_| handle_rust_export(db, interner, ent, &mut exports));
             }
         }
     }
@@ -153,6 +141,7 @@ fn get_exports<'tu>(
 
 fn handle_rust_export<'tu>(
     db: &impl FileInterner,
+    interner: &db::FileInterner<'tu>,
     ns: Entity<'tu>,
     exports: &mut Vec<(Path, Export<'tu>)>,
 ) -> Outcome<()> {
@@ -173,7 +162,7 @@ fn handle_rust_export<'tu>(
                 }
                 _ => diags.add(Diagnostic::error(
                     "invalid rust_export item",
-                    span(db, decl).label("only using declarations are allowed here"),
+                    span(db, interner, decl).label("only using declarations are allowed here"),
                 )),
             }
         }
@@ -183,13 +172,15 @@ fn handle_rust_export<'tu>(
 
 struct LowerCtx<'tu, DB: FileInterner> {
     db: &'tu DB,
+    interner: &'tu db::FileInterner<'tu>,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
 impl<'tu, DB: FileInterner> LowerCtx<'tu, DB> {
-    fn new(db: &'tu DB) -> Self {
+    fn new(db: &'tu DB, interner: &'tu db::FileInterner<'tu>) -> Self {
         LowerCtx {
             db,
+            interner,
             //visible: vec![],
         }
     }
@@ -352,15 +343,19 @@ impl<'tu, DB: FileInterner> LowerCtx<'tu, DB> {
     }
 
     fn span(&self, ent: Entity<'tu>) -> Span {
-        span(self.db, ent)
+        span(self.db, self.interner, ent)
     }
 }
 
-fn span(db: &impl FileInterner, ent: Entity<'_>) -> Span {
-    maybe_span_from_range(db, ent.get_range()).expect("TODO dummy span")
+fn span<'tu>(db: &impl FileInterner, interner: &db::FileInterner<'tu>, ent: Entity<'tu>) -> Span {
+    maybe_span_from_range(db, interner, ent.get_range()).expect("TODO dummy span")
 }
 
-fn maybe_span_from_range(db: &impl FileInterner, range: Option<SourceRange<'_>>) -> Option<Span> {
+fn maybe_span_from_range<'tu>(
+    db: &impl FileInterner,
+    interner: &db::FileInterner<'tu>,
+    range: Option<SourceRange<'tu>>,
+) -> Option<Span> {
     let range = match range {
         Some(range) => range,
         None => return None,
@@ -373,13 +368,7 @@ fn maybe_span_from_range(db: &impl FileInterner, range: Option<SourceRange<'_>>)
         (Some(f), Some(g)) if f == g => f,
         _ => return None,
     };
-    // TODO: Make performance not awful =)
-    use diagnostics::File as _;
-    let file = File {
-        name: file.name(),
-        contents: file.contents(),
-    };
-    let file_id = db.intern_file(file);
+    let file_id = interner.intern_file(db, file);
     Some(Span::new(file_id, start.offset, end.offset))
 }
 

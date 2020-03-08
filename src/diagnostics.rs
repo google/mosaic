@@ -108,7 +108,7 @@ pub mod db {
 pub use db::FileId;
 
 /// The source code associated with an object.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Span {
     file_id: FileId,
     span: codespan::Span,

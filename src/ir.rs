@@ -9,7 +9,6 @@
 //! language IR can be represented in the other.
 
 use crate::diagnostics::{err, ok, Diagnostic, Outcome, Span};
-use crate::Session;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
 
@@ -111,7 +110,7 @@ mod common {
         ((off + (align - 1)) / align) * align
     }
 
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
     pub struct Align(NonZeroU16);
 
     impl Align {
@@ -131,7 +130,7 @@ mod common {
     }
 
     // TODO u16 is probably not big enough for all cases
-    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Size(pub(super) u16);
 
     impl Size {
@@ -144,8 +143,20 @@ mod common {
 /// C++ intermediate representation.
 pub mod cc {
     use super::*;
+    use crate::libclang::db::AstMethods;
+    use std::sync::Arc;
 
     pub use common::{Align, Ident, Offset, Path, Size, StructId};
+
+    #[salsa::query_group(RsIrStorage)]
+    #[salsa::requires(AstMethods)]
+    pub trait RsIr {
+        fn rs_ir(&self) -> Arc<Outcome<rs::Module>>;
+    }
+
+    fn rs_ir(db: &(impl AstMethods + RsIr)) -> Arc<Outcome<rs::Module>> {
+        Arc::new(db.cc_ir_from_src().to_ref().then(|ir| ir.to_rust(db)))
+    }
 
     /// A set of C++ items being exposed to Rust. This is the top level of the IR
     /// representation.
@@ -174,10 +185,10 @@ pub mod cc {
     }
 
     impl Module {
-        pub fn to_rust(&self, sess: &Session) -> Outcome<rs::Module> {
+        pub fn to_rust(&self, db: &impl RsIr) -> Outcome<rs::Module> {
             self.structs
                 .iter()
-                .map(|s| s.to_rust(sess))
+                .map(|s| s.to_rust(db))
                 .collect::<Outcome<Vec<_>>>()
                 .then(|structs| ok(rs::Module { structs }))
         }
@@ -288,7 +299,7 @@ pub mod cc {
     }
 
     impl Struct {
-        pub fn to_rust(&self, sess: &Session) -> Outcome<rs::Struct> {
+        pub fn to_rust(&self, db: &impl RsIr) -> Outcome<rs::Struct> {
             let fields = self
                 .fields
                 .iter()
@@ -298,7 +309,7 @@ pub mod cc {
                     span: f.span.clone(),
                 })
                 .collect::<Vec<_>>();
-            self.check_offsets(sess, &fields).then(|()| {
+            self.check_offsets(db, &fields).then(|()| {
                 ok(rs::Struct {
                     name: self.name.clone(),
                     fields,
@@ -311,7 +322,7 @@ pub mod cc {
             })
         }
 
-        fn check_offsets(&self, _sess: &Session, fields: &Vec<rs::Field>) -> Outcome<()> {
+        fn check_offsets(&self, _db: &impl RsIr, fields: &Vec<rs::Field>) -> Outcome<()> {
             let mut offset = 0;
             let mut align = self.align;
             assert_eq!(self.fields.len(), self.offsets.len());
@@ -372,7 +383,7 @@ pub mod rs {
 
     pub use common::{Align, Ident, Offset, Path, Size, StructId};
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Module {
         pub(super) structs: Vec<Struct>,
     }
@@ -387,7 +398,7 @@ pub mod rs {
     }
 
     /// Represents properties of a Rust type in a #[repr(C)] struct.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub enum Ty {
         Error,
 
@@ -457,21 +468,21 @@ pub mod rs {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Field {
         pub name: Ident,
         pub ty: Ty,
         pub span: Span,
     }
 
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     #[allow(dead_code)]
     pub enum Repr {
         C,
         Opaque,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Struct {
         pub name: Path,
         pub fields: Vec<Field>,

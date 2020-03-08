@@ -1,3 +1,4 @@
+use crate::ir::cc::RsIr;
 use crate::libclang::db::AstMethods;
 use crate::{ir, libclang, Session};
 use clang::{self, TranslationUnit, Unsaved};
@@ -44,15 +45,13 @@ pub(crate) fn parse_and_lower(
 
     let tu = libclang::parse_with(CLANG.clone(), &sess, |index| parse(index, src));
     sess.db.set_parse_result(tu);
+    let rust_ir = sess.db.rs_ir();
 
-    let ir = &sess.db.cc_ir_from_src();
-    let rust_ir = ir.to_ref().then(|ir| ir.to_rust(sess));
-
-    let (mdl, errs) = rust_ir.split();
+    let (mdl, errs) = rust_ir.to_ref().split();
     assert_eq!(
         expected,
         errs.iter().map(|diag| diag.message()).collect::<Vec<_>>(),
         "did not get the expected set of lowering errors"
     );
-    mdl
+    mdl.clone()
 }

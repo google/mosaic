@@ -24,7 +24,8 @@ use libclang::File;
 #[salsa::database(
     libclang::db::AstMethodsStorage,
     diagnostics::db::FileInternerStorage,
-    diagnostics::db::BasicFileCacheStorage
+    diagnostics::db::BasicFileCacheStorage,
+    ir::cc::RsIrStorage
 )]
 pub struct Database {
     runtime: salsa::Runtime<Database>,
@@ -71,20 +72,23 @@ impl Session {
 }
 
 fn main() -> Result<(), libclang::Error> {
+    use ir::cc::RsIr;
     use libclang::db::AstMethods;
+
     let mut sess = Session::new();
     let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
 
     let parse = libclang::parse(&sess, &filename.into());
     sess.db.set_parse_result(parse);
-    let module = &sess.db.cc_ir_from_src();
-    let rs_module = module.to_ref().then(|m| m.to_rust(&sess));
+    let rs_module = sess.db.rs_ir();
 
-    let errs = match rs_module.val() {
-        Ok(rs_module) => codegen::perform_codegen(&sess, &rs_module).errs(),
-        Err(errs) => errs,
+    match rs_module.to_ref().val() {
+        Ok(rs_module) => {
+            let errs = codegen::perform_codegen(&sess, &rs_module).errs();
+            errs.emit(&sess.db, &sess.diags);
+        }
+        Err(errs) => errs.clone().emit(&sess.db, &sess.diags),
     };
-    errs.emit(&sess.db, &sess.diags);
 
     Ok(())
 }

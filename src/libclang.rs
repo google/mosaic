@@ -313,7 +313,7 @@ impl<'tu, DB: FileInterner + db::AstMethods> LowerCtx<'tu, DB> {
             let field_ty = field.get_type().unwrap();
             fields.push(Field {
                 name: Ident::from(field_name),
-                ty: field_ty.lower(),
+                ty: field_ty.lower(self),
                 span: self.span(field),
             });
             let offset: u16 = field
@@ -375,14 +375,14 @@ fn maybe_span_from_range<'tu>(
     Some(Span::new(file_id, start.offset, end.offset))
 }
 
-trait Lower {
+trait Lower<'tu> {
     type Output;
-    fn lower(&self) -> Self::Output;
+    fn lower<DB: FileInterner + db::AstMethods>(&self, ctx: &LowerCtx<'tu, DB>) -> Ty;
 }
 
-impl<'tu> Lower for Type<'tu> {
+impl<'tu> Lower<'tu> for Type<'tu> {
     type Output = Ty;
-    fn lower(&self) -> Ty {
+    fn lower<DB: FileInterner + db::AstMethods>(&self, _ctx: &LowerCtx<'tu, DB>) -> Ty {
         use TypeKind::*;
         match self.get_kind() {
             Int => Ty::Int,

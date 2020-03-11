@@ -158,12 +158,20 @@ pub mod cc {
     pub trait RsIr {
         fn rs_ir(&self) -> Arc<Outcome<rs::Module>>;
 
+        fn rs_struct_from_cc(&self, id: cc::StructId) -> Outcome<rs::StructId>;
+
         #[salsa::interned]
         fn intern_struct(&self, st: rs::Struct) -> rs::StructId;
     }
 
     fn rs_ir(db: &(impl AstMethods + RsIr)) -> Arc<Outcome<rs::Module>> {
         Arc::new(db.cc_ir_from_src().to_ref().then(|ir| ir.to_rust(db)))
+    }
+
+    fn rs_struct_from_cc(db: &(impl AstMethods + RsIr), id: cc::StructId) -> Outcome<rs::StructId> {
+        id.lookup(db)
+            .to_rust(db)
+            .then(|rs_st| ok(db.intern_struct(rs_st)))
     }
 
     /// A set of C++ items being exposed to Rust. This is the top level of the IR
@@ -194,11 +202,7 @@ pub mod cc {
         pub fn to_rust(&self, db: &(impl RsIr + AstMethods)) -> Outcome<rs::Module> {
             self.structs
                 .iter()
-                .map(|st| {
-                    st.lookup(db)
-                        .to_rust(db)
-                        .then(|rs_st| ok(db.intern_struct(rs_st)))
-                })
+                .map(|cc_id| db.rs_struct_from_cc(*cc_id))
                 .collect::<Outcome<Vec<_>>>()
                 .then(|structs| ok(rs::Module { structs }))
         }
@@ -266,7 +270,7 @@ pub mod cc {
             self == &Ty::Error
         }
 
-        pub fn to_rust(&self) -> rs::Ty {
+        pub fn to_rust(&self, db: &impl RsIr) -> rs::Ty {
             //use salsa::InternKey;
             use Ty::*;
             match self {
@@ -287,7 +291,7 @@ pub mod cc {
                 Float => rs::Ty::F32,
                 Double => rs::Ty::F64,
                 Bool => rs::Ty::Bool,
-                Struct(_id) => todo!(),
+                Struct(id) => rs::Ty::Struct(db.rs_struct_from_cc(*id).skip_errs()), // TODO
             }
         }
     }
@@ -316,7 +320,7 @@ pub mod cc {
                 .iter()
                 .map(|f| rs::Field {
                     name: f.name.clone(),
-                    ty: f.ty.to_rust(),
+                    ty: f.ty.to_rust(db),
                     span: f.span.clone(),
                 })
                 .collect::<Vec<_>>();
@@ -333,13 +337,13 @@ pub mod cc {
             })
         }
 
-        fn check_offsets(&self, _db: &impl RsIr, fields: &Vec<rs::Field>) -> Outcome<()> {
+        fn check_offsets(&self, db: &impl RsIr, fields: &Vec<rs::Field>) -> Outcome<()> {
             let mut offset = 0;
             let mut align = self.align;
             assert_eq!(self.fields.len(), self.offsets.len());
             for (idx, field) in fields.iter().enumerate() {
-                offset = common::align_to(offset, field.ty.align());
-                align = std::cmp::max(align, field.ty.align());
+                offset = common::align_to(offset, field.ty.align(db));
+                align = std::cmp::max(align, field.ty.align(db));
 
                 // Here's where we could add padding, if we wanted to.
                 if offset != self.offsets[idx] {
@@ -358,7 +362,7 @@ pub mod cc {
                     );
                 }
 
-                offset += field.ty.size().0;
+                offset += field.ty.size(db).0;
             }
 
             let size = common::align_to(offset, align);
@@ -391,6 +395,7 @@ pub mod cc {
 /// Rust intermediate representation.
 pub mod rs {
     use super::*;
+    use cc::RsIr;
 
     pub use common::{Align, Ident, Offset, Path, Size};
 
@@ -438,7 +443,7 @@ pub mod rs {
     }
 
     impl Ty {
-        pub fn size(&self) -> Size {
+        pub fn size(&self, db: &impl RsIr) -> Size {
             use Ty::*;
             let sz = match self {
                 Error => 1,
@@ -451,14 +456,14 @@ pub mod rs {
                 F32 => 4,
                 F64 => 8,
                 Bool => 1,
-                Struct(_) => unimplemented!(),
+                Struct(id) => return id.lookup(db).size,
             };
             Size::new(sz)
         }
 
-        pub fn align(&self) -> Align {
+        pub fn align(&self, db: &impl RsIr) -> Align {
             // TODO make target dependent. this assumes x86_64
-            Align::new(self.size().0)
+            Align::new(self.size(db).0)
         }
     }
 
@@ -584,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic] // TODO
+    #[should_panic(expected = "unsupported type")]
     fn nested_struct() {
         let mut sess = Session::test();
         let ir = cpp_lower!(sess, {

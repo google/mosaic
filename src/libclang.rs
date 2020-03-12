@@ -1,15 +1,19 @@
 use crate::{
-    diagnostics::{self, db::FileInterner, err, ok, Diagnostic, Diagnostics, Outcome, Span},
+    diagnostics::{err, ok, Diagnostic, Diagnostics, FileId, Outcome, Span},
     ir::cc::{self, *},
     util::DisplayName,
     Session,
 };
 use clang::{
-    self, source::SourceRange, Accessibility, Clang, Entity, EntityKind, Parser, SourceError,
-    TranslationUnit, Type, TypeKind,
+    self, source, source::SourceRange, Accessibility, Clang, Entity, EntityKind, Parser,
+    SourceError, TranslationUnit, Type, TypeKind,
 };
+use core::hash::Hasher;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::error::Error as _;
+use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,7 +21,95 @@ pub(crate) mod db;
 
 pub type Error = SourceError;
 
-pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::FullParseResult {
+thread_local! {
+    // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
+    static AST_CONTEXT: RefCell<Option<db::AstContext>> = RefCell::new(None);
+}
+
+struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
+struct InternerInner<T: Hash + Eq, Id> {
+    map: HashMap<T, Id>,
+    values: Vec<T>,
+}
+impl<T: Hash + Eq + Clone, Id: salsa::InternKey + Copy> Interner<T, Id> {
+    fn new() -> Self {
+        Interner(RefCell::new(InternerInner {
+            map: HashMap::new(),
+            values: vec![],
+        }))
+    }
+
+    fn intern(&self, item: T) -> Id {
+        let InternerInner { map, values } = &mut *self.0.borrow_mut();
+        map.entry(item.clone())
+            .or_insert_with(|| {
+                let id = Id::from_intern_id(salsa::InternId::from(values.len()));
+                values.push(item);
+                id
+            })
+            .clone()
+    }
+
+    fn lookup(&self, _id: Id) -> &T {
+        todo!()
+    }
+}
+
+intern_key!(EntityId);
+intern_key!(ExportId);
+
+#[allow(dead_code)]
+struct AstContextInner<'tu> {
+    root: clang::Entity<'tu>,
+    // TODO do something with these (and we don't have to store them)
+    diagnostics: Vec<clang::diagnostic::Diagnostic<'tu>>,
+
+    files: Interner<source::File<'tu>, FileId>,
+    entities: Interner<Entity<'tu>, EntityId>,
+    exports: Interner<(Path, Export<'tu>), ExportId>,
+}
+
+impl<'tu> AstContextInner<'tu> {
+    pub fn new(tu: &'tu TranslationUnit<'tu>) -> Self {
+        AstContextInner {
+            root: tu.get_entity(),
+            diagnostics: tu.get_diagnostics(),
+
+            files: Interner::new(),
+            entities: Interner::new(),
+            exports: Interner::new(),
+        }
+    }
+}
+
+pub(crate) fn set_ast<R>(
+    db: &mut crate::Database,
+    ctx: db::AstContext,
+    f: impl FnOnce(&crate::Database) -> R,
+) -> R {
+    use salsa::Database;
+    db.query_mut(db::AstContextQuery).invalidate(&());
+    AST_CONTEXT.with(|cx| *cx.borrow_mut() = Some(ctx));
+    let res = f(db);
+    AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
+    res
+}
+
+fn with_ast<R>(
+    db: &impl db::AstMethods,
+    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ AstContextInner<'tu>) -> R,
+) -> R {
+    // Report that we're reading the ast context.
+    db.ast_context();
+    AST_CONTEXT.with(|ctx| {
+        ctx.borrow_mut()
+            .as_mut()
+            .expect("with_ast called with no ast defined")
+            .with(f)
+    })
+}
+
+pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::AstContext {
     let clang = Arc::new(Clang::new().unwrap());
     parse_with(clang, sess, |index| {
         let parser = index.parser(filename);
@@ -27,20 +119,12 @@ pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::FullParseResult {
 
 pub(crate) fn parse_with(
     clang: Arc<Clang>,
-    sess: &Session,
+    _sess: &Session,
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
-) -> db::FullParseResult {
+) -> db::AstContext {
     let index = db::Index::new(clang, false, false);
     let tu = index.parse_with(parse_fn);
-    tu.build_parse_result(|tu, interner| {
-        get_exports(&sess.db, &interner, tu).then(|exports| {
-            ok(db::ParseResultData {
-                root: tu.get_entity(),
-                exports,
-                diagnostics: tu.get_diagnostics(),
-            })
-        })
-    })
+    db::AstContext::new(tu)
 }
 
 pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
@@ -50,6 +134,26 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
         "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
     ]);
     parser
+}
+
+fn lower_ast(db: &impl db::AstMethods) -> Outcome<cc::Module> {
+    with_ast(db, |tu, ast| -> Outcome<cc::Module> {
+        let exports = get_exports(ast, tu);
+        exports.then(|exports| LowerCtx::new(db, ast).lower(&exports))
+    })
+}
+
+pub(crate) struct File;
+impl File {
+    pub(crate) fn get_name_and_contents(db: &impl db::AstMethods, id: FileId) -> (String, String) {
+        with_ast(db, |_, ctx| {
+            let file = ctx.files.lookup(id);
+            (
+                file.get_path().as_path().to_string_lossy().into(),
+                file.get_contents().unwrap_or_default(),
+            )
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -82,52 +186,32 @@ impl<'tu> From<clang::Type<'tu>> for AstKind<'tu> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Export<'tu> {
     Decl(Entity<'tu>),
-    Type(Type<'tu>),
+    Type(HashType<'tu>),
     TemplateType(Entity<'tu>),
 }
 impl<'tu> Export<'tu> {
     fn get(&self) -> AstKind {
         match self {
             Export::Decl(ent) => AstKind::Entity(*ent),
-            Export::Type(ty) => AstKind::Type(*ty),
+            Export::Type(ty) => AstKind::Type(ty.0),
             Export::TemplateType(ent) => AstKind::Entity(*ent),
         }
     }
 }
 
-impl<'tu> diagnostics::File for clang::source::File<'tu> {
-    fn name(&self) -> String {
-        self.get_path()
-            .as_path()
-            .to_str()
-            .expect("path was not valid UTF-8")
-            .into()
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HashType<'tu>(Type<'tu>);
+impl<'tu> Hash for HashType<'tu> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Hash::hash(&self.0.get_declaration(), state)
     }
-
-    fn contents(&self) -> String {
-        self.get_contents().unwrap()
-    }
-}
-
-pub type File = db::AstFile;
-
-fn lower_ast(
-    db: &(impl FileInterner + db::AstMethods),
-    parse: db::FullParseResult,
-) -> Outcome<cc::Module> {
-    parse.with(|_tu, outcome, interner| {
-        outcome
-            .to_ref()
-            .then(|parse| LowerCtx::new(db, interner).lower(&parse.exports))
-    })
 }
 
 fn get_exports<'tu>(
-    db: &impl FileInterner,
-    interner: &db::FileInterner<'tu>,
+    ast: &AstContextInner<'tu>,
     tu: &'tu TranslationUnit<'tu>,
 ) -> Outcome<Vec<(Path, Export<'tu>)>> {
     let mut outcome = ok(());
@@ -135,7 +219,7 @@ fn get_exports<'tu>(
     for ent in tu.get_entity().get_children() {
         if let EntityKind::Namespace = ent.get_kind() {
             if let Some("rust_export") = ent.get_name().as_deref() {
-                outcome = outcome.then(|_| handle_rust_export(db, interner, ent, &mut exports));
+                outcome = outcome.then(|_| handle_rust_export(ast, ent, &mut exports));
             }
         }
     }
@@ -143,8 +227,7 @@ fn get_exports<'tu>(
 }
 
 fn handle_rust_export<'tu>(
-    db: &impl FileInterner,
-    interner: &db::FileInterner<'tu>,
+    ast: &AstContextInner<'tu>,
     ns: Entity<'tu>,
     exports: &mut Vec<(Path, Export<'tu>)>,
 ) -> Outcome<()> {
@@ -158,14 +241,14 @@ fn handle_rust_export<'tu>(
                 }
                 EntityKind::TypeAliasDecl => exports.push((
                     name,
-                    Export::Type(decl.get_typedef_underlying_type().unwrap()),
+                    Export::Type(HashType(decl.get_typedef_underlying_type().unwrap())),
                 )),
                 EntityKind::TypeAliasTemplateDecl => {
                     exports.push((name, Export::TemplateType(decl)))
                 }
                 _ => diags.add(Diagnostic::error(
                     "invalid rust_export item",
-                    span(db, interner, decl).label("only using declarations are allowed here"),
+                    span(ast, decl).label("only using declarations are allowed here"),
                 )),
             }
         }
@@ -173,17 +256,17 @@ fn handle_rust_export<'tu>(
     .into()
 }
 
-struct LowerCtx<'tu, DB: FileInterner + db::AstMethods> {
-    db: &'tu DB,
-    interner: &'tu db::FileInterner<'tu>,
+struct LowerCtx<'ctx, 'tu, DB: db::AstMethods> {
+    db: &'ctx DB,
+    ast: &'ctx AstContextInner<'tu>,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
-impl<'tu, DB: FileInterner + db::AstMethods> LowerCtx<'tu, DB> {
-    fn new(db: &'tu DB, interner: &'tu db::FileInterner<'tu>) -> Self {
+impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
+    fn new(db: &'ctx DB, ast: &'ctx AstContextInner<'tu>) -> Self {
         LowerCtx {
             db,
-            interner,
+            ast,
             //visible: vec![],
         }
     }
@@ -205,7 +288,7 @@ impl<'tu, DB: FileInterner + db::AstMethods> LowerCtx<'tu, DB> {
                 println!("{} = {:?}", name, ty);
                 println!(
                     "  {:?}",
-                    ty.get_elaborated_type()
+                    ty.0.get_elaborated_type()
                         .unwrap() // TODO hack
                         .get_template_argument_types()
                 );
@@ -346,17 +429,16 @@ impl<'tu, DB: FileInterner + db::AstMethods> LowerCtx<'tu, DB> {
     }
 
     fn span(&self, ent: Entity<'tu>) -> Span {
-        span(self.db, self.interner, ent)
+        span(self.ast, ent)
     }
 }
 
-fn span<'tu>(db: &impl FileInterner, interner: &db::FileInterner<'tu>, ent: Entity<'tu>) -> Span {
-    maybe_span_from_range(db, interner, ent.get_range()).expect("TODO dummy span")
+fn span<'tu>(ast: &AstContextInner<'tu>, ent: Entity<'tu>) -> Span {
+    maybe_span_from_range(ast, ent.get_range()).expect("TODO dummy span")
 }
 
 fn maybe_span_from_range<'tu>(
-    db: &impl FileInterner,
-    interner: &db::FileInterner<'tu>,
+    ast: &AstContextInner<'tu>,
     range: Option<SourceRange<'tu>>,
 ) -> Option<Span> {
     let range = match range {
@@ -371,18 +453,18 @@ fn maybe_span_from_range<'tu>(
         (Some(f), Some(g)) if f == g => f,
         _ => return None,
     };
-    let file_id = interner.intern_file(db, file);
+    let file_id = ast.files.intern(file);
     Some(Span::new(file_id, start.offset, end.offset))
 }
 
-trait Lower<'tu> {
+trait Lower<'ctx, 'tu> {
     type Output;
-    fn lower<DB: FileInterner + db::AstMethods>(&self, ctx: &LowerCtx<'tu, DB>) -> Ty;
+    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Ty;
 }
 
-impl<'tu> Lower<'tu> for Type<'tu> {
+impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
     type Output = Ty;
-    fn lower<DB: FileInterner + db::AstMethods>(&self, _ctx: &LowerCtx<'tu, DB>) -> Ty {
+    fn lower<DB: db::AstMethods>(&self, _ctx: &LowerCtx<'ctx, 'tu, DB>) -> Ty {
         use TypeKind::*;
         match self.get_kind() {
             Int => Ty::Int,

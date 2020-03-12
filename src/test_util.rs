@@ -1,5 +1,4 @@
 use crate::ir::cc::RsIr;
-use crate::libclang::db::AstMethods;
 use crate::{ir, libclang, Session};
 use clang::{self, TranslationUnit, Unsaved};
 use lazy_static::lazy_static;
@@ -43,9 +42,8 @@ pub(crate) fn parse_and_lower(
 ) -> ir::rs::Module {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
 
-    let tu = libclang::parse_with(CLANG.clone(), &sess, |index| parse(index, src));
-    sess.db.set_parse_result(tu);
-    let rust_ir = sess.db.rs_ir();
+    let ast = libclang::parse_with(CLANG.clone(), &sess, |index| parse(index, src));
+    let rust_ir = libclang::set_ast(&mut sess.db, ast, |db| db.rs_ir());
 
     let (mdl, errs) = rust_ir.to_ref().split();
     assert_eq!(

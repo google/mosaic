@@ -24,11 +24,6 @@ pub mod db {
     use std::sync::Arc;
 
     intern_key!(FileId);
-    impl FileId {
-        pub fn lookup(&self, db: &impl FileInterner) -> crate::File {
-            db.lookup_intern_file(*self)
-        }
-    }
     impl PartialOrd for FileId {
         fn partial_cmp(&self, other: &FileId) -> Option<std::cmp::Ordering> {
             Some(self.cmp(other))
@@ -42,40 +37,29 @@ pub mod db {
         }
     }
 
-    #[salsa::query_group(FileInternerStorage)]
-    pub trait FileInterner
-    where
-        // This code should stay agnostic to the actual file type.
-        crate::File: File,
-    {
-        #[salsa::interned]
-        fn intern_file(&self, file: crate::File) -> FileId;
-    }
-
     /// Since the Files trait (and libclang) copy the entire file contents every
-    /// time we request them, we need a way of caching those contents. We then
-    /// wrap them in SimpleFile, which creates an index of the start of every
+    /// time we request them, we need a way of caching those contents. Once cached,
+    /// we wrap them in SimpleFile, which creates an index of the start of every
     /// line.
+    // TODO: Why am I double-layering Arc's here?
     #[derive(Debug, Clone)]
     pub struct BasicFile(SimpleFile<Arc<str>, Arc<str>>);
     impl PartialEq for BasicFile {
         fn eq(&self, other: &BasicFile) -> bool {
-            self.0.origin() == other.0.origin() && self.0.source() == other.0.source()
+            Arc::ptr_eq(self.0.origin(), other.0.origin())
+                && Arc::ptr_eq(self.0.source(), other.0.source())
         }
     }
     impl Eq for BasicFile {}
 
     /// Cache for [`BasicFile`]. Should not be used outside of the `diagnostics` module.
     #[salsa::query_group(BasicFileCacheStorage)]
-    pub trait BasicFileCache: FileInterner {
+    pub trait BasicFileCache: crate::FileInterner {
         fn basic_file(&self, id: FileId) -> Arc<BasicFile>;
     }
-    fn basic_file(db: &impl FileInterner, id: FileId) -> Arc<BasicFile> {
-        let file = id.lookup(db);
-        Arc::new(BasicFile(SimpleFile::new(
-            file.name().into(),
-            file.contents().into(),
-        )))
+    fn basic_file(db: &impl crate::FileInterner, id: FileId) -> Arc<BasicFile> {
+        let (name, contents) = crate::File::get_name_and_contents(db, id);
+        Arc::new(BasicFile(SimpleFile::new(name.into(), contents.into())))
     }
 
     /// Adapter between salsa, BasicFile, and the Files trait.
@@ -194,16 +178,6 @@ impl DiagnosticsCtx {
     fn clone(&self) -> Self {
         DiagnosticsCtx(Rc::clone(&self.0))
     }
-}
-
-/// A representation of a source file to be used with `SourceFileMap`.
-pub trait File: Clone + Eq + Hash + Debug {
-    /// Returns the name of the file (often, the path to it). This will be used
-    /// in diagnostics messages.
-    fn name(&self) -> String;
-
-    /// Returns the contents of the file.
-    fn contents(&self) -> String;
 }
 
 #[must_use]

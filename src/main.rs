@@ -19,17 +19,19 @@ use crate::diagnostics::DiagnosticsCtx;
 use salsa;
 use std::env;
 
-use libclang::File;
+pub(crate) use libclang::File;
 
 #[salsa::database(
     libclang::db::AstMethodsStorage,
-    diagnostics::db::FileInternerStorage,
     diagnostics::db::BasicFileCacheStorage,
     ir::cc::RsIrStorage
 )]
 pub struct Database {
     runtime: salsa::Runtime<Database>,
 }
+
+pub trait FileInterner: libclang::db::AstMethods {}
+impl FileInterner for Database {}
 
 impl salsa::Database for Database {
     fn salsa_runtime(&self) -> &salsa::Runtime<Database> {
@@ -73,14 +75,12 @@ impl Session {
 
 fn main() -> Result<(), libclang::Error> {
     use ir::cc::RsIr;
-    use libclang::db::AstMethods;
 
     let mut sess = Session::new();
     let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
 
     let parse = libclang::parse(&sess, &filename.into());
-    sess.db.set_parse_result(parse);
-    let rs_module = sess.db.rs_ir();
+    let rs_module = libclang::set_ast(&mut sess.db, parse, |db| db.rs_ir());
 
     match rs_module.to_ref().val() {
         Ok(rs_module) => {

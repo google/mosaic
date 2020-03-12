@@ -1,18 +1,18 @@
 #![allow(dead_code)]
 use super::{AstKind, Export, Path};
-use crate::{
-    diagnostics::{self, Outcome},
-    ir,
-};
+use crate::{diagnostics::Outcome, ir};
 use std::cmp::{Eq, PartialEq};
 use std::fmt::{self, Debug};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[salsa::query_group(AstMethodsStorage)]
-pub trait AstMethods: diagnostics::db::FileInterner {
+pub trait AstMethods {
     #[salsa::input]
     fn parse_result(&self) -> FullParseResult;
+
+    #[salsa::dependencies]
+    fn ast_context(&self) -> ();
 
     fn cc_ir_from_src(&self) -> Arc<Outcome<ir::cc::Module>>;
 
@@ -23,8 +23,13 @@ pub trait AstMethods: diagnostics::db::FileInterner {
     fn intern_ast_path(&self, path: AstPath) -> AstPathId;
 }
 
+fn ast_context(db: &(impl AstMethods + salsa::Database)) {
+    db.salsa_runtime()
+        .report_synthetic_read(salsa::Durability::LOW);
+}
+
 fn cc_ir_from_src(db: &impl AstMethods) -> Arc<Outcome<ir::cc::Module>> {
-    Arc::new(super::lower_ast(db, db.parse_result()))
+    Arc::new(super::lower_ast(db))
 }
 
 intern_key!(AstPathId);
@@ -75,6 +80,28 @@ rental! {
             tu: Arc<Tu>,
             result: ParseResult<'tu_2>,
         }
+
+        #[rental]
+        pub(super) struct AstContext {
+            #[subrental = 3]
+            tu: Arc<Tu>,
+            result: super::super::AstContextInner<'tu_2>,
+        }
+    }
+}
+
+pub struct AstContext(rent::AstContext);
+impl AstContext {
+    pub fn new(tu: AstTu) -> Self {
+        AstContext(rent::AstContext::new(tu.0, |tu| {
+            super::AstContextInner::new(tu.tu)
+        }))
+    }
+    pub(super) fn with<R>(
+        &mut self,
+        f: impl for<'tu> FnOnce(&'tu clang::TranslationUnit<'tu>, &super::AstContextInner<'tu>) -> R,
+    ) -> R {
+        self.0.rent_all(|r| f(r.tu.tu, r.result))
     }
 }
 
@@ -104,28 +131,6 @@ impl AstTu {
         AstEntity(rent::Entity::new(self.0, |tu| tu.tu.get_entity()))
     }
 
-    pub fn build_parse_result(
-        self,
-        f: impl for<'tu, 'intern> FnOnce(
-            &'tu clang::TranslationUnit<'tu>,
-            &'intern FileInterner<'tu>,
-        ) -> ParseResult<'tu>,
-    ) -> FullParseResult {
-        FullParseResult(Arc::new(rent::FullParseResult::new(
-            self.0.clone(),
-            move |tu| {
-                // Safety: This is safe because f must be valid for any lifetime
-                // 'tu, and we are giving it other borrows of lifetime 'tu that are
-                // only valid for as long as the clang::TranslationUnit. Therefore
-                // the lifetime 'tu must be small enough, and f can only intern
-                // the type clang::source::File<'tu> though the FileInterner
-                // interface.
-                let interner = unsafe { FileInterner::new(self.0) };
-                f(&tu.tu, &interner)
-            },
-        )))
-    }
-
     // maybe just stop here, with with_entity()?
 }
 
@@ -142,21 +147,6 @@ impl Hash for AstFile {
         self.0.rent(|f| f.hash(state));
     }
 }
-impl diagnostics::File for AstFile {
-    fn name(&self) -> String {
-        self.0.rent(|f| {
-            f.get_path()
-                .as_path()
-                .to_str()
-                .expect("path was not valid UTF-8")
-                .into()
-        })
-    }
-
-    fn contents(&self) -> String {
-        self.0.rent(|f| f.get_contents().unwrap())
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct ParseResultData<'tu> {
@@ -170,63 +160,8 @@ pub type ParseResult<'tu> = Outcome<ParseResultData<'tu>>;
 //pub trait FileInterner<'tu>: Fn(clang::Entity<'tu>) -> diagnostics::db::FileId {}
 //impl<'tu, T> FileInterner<'tu> for T where T: Fn(clang::Entity<'tu>) -> diagnostics::db::FileId {}
 
-mod interner {
-    use super::*;
-    use std::marker::PhantomData;
-
-    pub struct FileInterner<'tu> {
-        tu: Arc<rent::Tu>,
-        phantom: PhantomData<clang::TranslationUnit<'tu>>,
-    }
-    impl<'tu> FileInterner<'tu> {
-        // Only construct this with lifetime parameters that can never be larger
-        // than that of the clang::TranslationUnit.
-        pub(super) unsafe fn new(tu: Arc<rent::Tu>) -> Self {
-            FileInterner {
-                tu,
-                phantom: PhantomData,
-            }
-        }
-
-        pub fn intern_file(
-            &self,
-            db: &impl crate::diagnostics::db::FileInterner,
-            file: clang::source::File<'tu>,
-        ) -> diagnostics::db::FileId {
-            let ast_file = AstFile(Arc::new(rent::File::new(self.tu.clone(), |_tu| unsafe {
-                let file: clang::source::File<'_> = std::mem::transmute(file);
-                file
-            })));
-            db.intern_file(ast_file)
-        }
-    }
-}
-pub use interner::FileInterner;
-
 #[derive(Clone, Debug)]
 pub struct FullParseResult(Arc<rent::FullParseResult>);
-impl FullParseResult {
-    pub fn with<R>(
-        &self,
-        f: impl for<'tu> FnOnce(
-            &'tu clang::TranslationUnit<'tu>,
-            &Outcome<ParseResultData<'tu>>,
-            &'tu FileInterner<'tu>,
-        ) -> R,
-    ) -> R {
-        self.0.rent_all(|inner| {
-            let tu: Arc<rent::Tu> = rent::FullParseResult::clone(&self.0).into_head();
-            // Safety: This is safe because f must be valid for any lifetime
-            // 'tu, and we are giving it other borrows of lifetime 'tu that are
-            // only valid for as long as the clang::TranslationUnit. Therefore
-            // the lifetime 'tu must be small enough, and f can only intern
-            // the type clang::source::File<'tu> though the FileInterner
-            // interface.
-            let interner = unsafe { FileInterner::new(tu) };
-            f(inner.tu.tu, inner.result, &interner)
-        })
-    }
-}
 
 // Make this (for the root Entity of the TU) an "input" to salsa.
 // Actually, use the "lazy read" pattern. Hold a map of translation units in our

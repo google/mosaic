@@ -50,8 +50,8 @@ impl<T: Hash + Eq + Clone, Id: salsa::InternKey + Copy> Interner<T, Id> {
             .clone()
     }
 
-    fn lookup(&self, _id: Id) -> &T {
-        todo!()
+    fn lookup(&self, id: Id) -> T {
+        self.0.borrow().values[id.as_intern_id().as_usize()].clone()
     }
 }
 
@@ -281,7 +281,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         outcome.then(|()| ok(mdl))
     }
 
-    fn lower_export(&mut self, name: &Path, export: &Export<'tu>, mdl: &mut Module) -> Outcome<()> {
+    fn lower_export(&self, name: &Path, export: &Export<'tu>, mdl: &mut Module) -> Outcome<()> {
         match export {
             Export::Decl(decl_ref) => self.lower_decl(name, *decl_ref, mdl),
             Export::Type(ty) => {
@@ -317,12 +317,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower_decl(
-        &mut self,
-        name: &Path,
-        decl_ref: Entity<'tu>,
-        mdl: &mut cc::Module,
-    ) -> Outcome<()> {
+    fn lower_decl(&self, name: &Path, decl_ref: Entity<'tu>, mdl: &mut cc::Module) -> Outcome<()> {
         let overloads = decl_ref.get_overloaded_declarations().unwrap();
         assert_eq!(overloads.len(), 1);
         let ent = overloads[0];
@@ -335,7 +330,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         match ent.get_kind() {
             EntityKind::StructDecl => self.lower_struct(name, ent).then(|st| {
                 if let Some(st) = st {
-                    mdl.add_struct(self.db.intern_cc_struct(st));
+                    mdl.add_struct(st);
                 }
                 ok(())
             }),
@@ -350,7 +345,9 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower_struct(&mut self, name: &Path, ent: Entity<'tu>) -> Outcome<Option<cc::Struct>> {
+    fn lower_struct(&self, name: &Path, ent: Entity<'tu>) -> Outcome<Option<cc::StructId>> {
+        assert_eq!(ent.get_kind(), EntityKind::StructDecl);
+
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
             return err(
@@ -382,6 +379,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         let ty_fields = ty.get_fields().unwrap();
         let mut fields = Vec::with_capacity(ty_fields.len());
         let mut offsets = Vec::with_capacity(ty_fields.len());
+        let mut errs = Diagnostics::new();
         for field in ty_fields {
             if let Some(acc) = field.get_accessibility() {
                 if Accessibility::Public != acc {
@@ -393,10 +391,11 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                 // Don't "peer through" anonymous struct/union fields, for now.
                 None => continue,
             };
-            let field_ty = field.get_type().unwrap();
+            let (ty, field_ty_errs) = field.get_type().unwrap().lower(self).split();
+            errs.append(field_ty_errs);
             fields.push(Field {
                 name: Ident::from(field_name),
-                ty: field_ty.lower(self),
+                ty,
                 span: self.span(field),
             });
             let offset: u16 = field
@@ -418,14 +417,14 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             offsets.push(offset / 8);
         }
 
-        ok(Some(cc::Struct {
+        ok(Some(self.db.intern_cc_struct(cc::Struct {
             name: name.clone(),
             fields,
             offsets,
             size: cc::Size::new(size),
             align: cc::Align::new(align),
             span: self.span(ent),
-        }))
+        })))
     }
 
     fn span(&self, ent: Entity<'tu>) -> Span {
@@ -459,14 +458,14 @@ fn maybe_span_from_range<'tu>(
 
 trait Lower<'ctx, 'tu> {
     type Output;
-    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Ty;
+    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty>;
 }
 
 impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
     type Output = Ty;
-    fn lower<DB: db::AstMethods>(&self, _ctx: &LowerCtx<'ctx, 'tu, DB>) -> Ty {
+    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty> {
         use TypeKind::*;
-        match self.get_kind() {
+        ok(match self.get_kind() {
             Int => Ty::Int,
             UInt => Ty::UInt,
             CharS => Ty::CharS,
@@ -475,7 +474,13 @@ impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
             UChar => Ty::UChar,
             Float => Ty::Float,
             Double => Ty::Double,
+            Record => {
+                let decl = self.get_declaration().unwrap();
+                return ctx
+                    .lower_struct(&Path::from(self.get_display_name()), decl)
+                    .then(|st| ok(st.map_or(Ty::Error, |st| Ty::Struct(st))));
+            }
             _ => panic!("unsupported type {:?}", self),
-        }
+        })
     }
 }

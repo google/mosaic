@@ -42,14 +42,19 @@ pub(crate) fn parse_and_lower(
 ) -> ir::rs::Module {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
 
-    let ast = libclang::parse_with(CLANG.clone(), &sess, |index| parse(index, src));
-    let rust_ir = libclang::set_ast(&mut sess.db, ast, |db| db.rs_ir());
+    let diags = &sess.diags;
 
-    let (mdl, errs) = rust_ir.to_ref().split();
+    let ast = libclang::parse_with(CLANG.clone(), &sess, |index| parse(index, src));
+    let (rust_ir, errs) = libclang::set_ast(&mut sess.db, ast, |db| {
+        let rs_ir = db.rs_ir();
+        let (mdl, errs) = rs_ir.to_ref().split();
+        errs.clone().emit(db, diags);
+        (mdl.clone(), errs.clone())
+    });
     assert_eq!(
         expected,
         errs.iter().map(|diag| diag.message()).collect::<Vec<_>>(),
         "did not get the expected set of lowering errors"
     );
-    mdl.clone()
+    rust_ir.clone()
 }

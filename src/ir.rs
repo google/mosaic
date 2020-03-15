@@ -270,10 +270,10 @@ pub mod cc {
             self == &Ty::Error
         }
 
-        pub fn to_rust(&self, db: &impl RsIr) -> rs::Ty {
+        pub fn to_rust(&self, db: &impl RsIr) -> Outcome<rs::Ty> {
             //use salsa::InternKey;
             use Ty::*;
-            match self {
+            ok(match self {
                 Error => rs::Ty::Error,
                 Short => rs::Ty::I16,
                 UShort => rs::Ty::U16,
@@ -291,8 +291,8 @@ pub mod cc {
                 Float => rs::Ty::F32,
                 Double => rs::Ty::F64,
                 Bool => rs::Ty::Bool,
-                Struct(id) => rs::Ty::Struct(db.rs_struct_from_cc(*id).skip_errs()), // TODO
-            }
+                Struct(id) => return db.rs_struct_from_cc(*id).map(rs::Ty::Struct),
+            })
         }
     }
 
@@ -318,14 +318,16 @@ pub mod cc {
             let fields = self
                 .fields
                 .iter()
-                .map(|f| rs::Field {
-                    name: f.name.clone(),
-                    ty: f.ty.to_rust(db),
-                    span: f.span.clone(),
+                .map(|f| {
+                    f.ty.to_rust(db).map(|ty| rs::Field {
+                        name: f.name.clone(),
+                        ty,
+                        span: f.span.clone(),
+                    })
                 })
-                .collect::<Vec<_>>();
-            self.check_offsets(db, &fields).then(|()| {
-                ok(rs::Struct {
+                .collect::<Outcome<Vec<_>>>();
+            fields.then(|fields| {
+                self.check_offsets(db, &fields).map(|()| rs::Struct {
                     name: self.name.clone(),
                     fields,
                     offsets: self.offsets.clone(),
@@ -462,8 +464,11 @@ pub mod rs {
         }
 
         pub fn align(&self, db: &impl RsIr) -> Align {
-            // TODO make target dependent. this assumes x86_64
-            Align::new(self.size(db).0)
+            match self {
+                Ty::Struct(id) => id.lookup(db).align,
+                // TODO make target dependent. this assumes x86_64
+                _ => Align::new(self.size(db).0),
+            }
         }
     }
 
@@ -485,7 +490,7 @@ pub mod rs {
                 F32 => "f32",
                 F64 => "f64",
                 Bool => "bool",
-                Struct(_) => unimplemented!(),
+                Struct(_id) => unimplemented!(),
             };
             write!(f, "{}", name)
         }
@@ -589,9 +594,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unsupported type")]
     fn nested_struct() {
-        let mut sess = Session::test();
+        let mut sess = Session::new();
         let ir = cpp_lower!(sess, {
             struct Foo {
                 int a, b;
@@ -606,5 +610,26 @@ mod tests {
         });
         let st = ir.structs[0].lookup(&sess.db);
         assert_eq!(rs::Size::new(12), st.size);
+        assert_eq!(rs::Align::new(4), st.align);
+    }
+
+    #[test]
+    fn nested_struct_alignas() {
+        let mut sess = Session::new();
+        let ir = cpp_lower!(sess, {
+            struct alignas(8) Foo {
+                int a, b;
+            };
+            struct Bar {
+                char c, d;
+                Foo foo;
+            };
+            namespace rust_export {
+                using ::Bar;
+            }
+        });
+        let st = ir.structs[0].lookup(&sess.db);
+        assert_eq!(rs::Size::new(16), st.size);
+        assert_eq!(rs::Align::new(8), st.align);
     }
 }

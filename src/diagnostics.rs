@@ -285,7 +285,7 @@ pub struct Diagnostics {
     val: Vec<Diagnostic>,
 }
 impl Diagnostics {
-    fn new() -> Diagnostics {
+    pub fn new() -> Diagnostics {
         Diagnostics { val: vec![] }
     }
 
@@ -409,6 +409,13 @@ impl<T> Outcome<T> {
         Outcome {
             val: outcome.val,
             err: Diagnostics::merge(&self.err, &outcome.err),
+        }
+    }
+
+    pub fn map<R>(self, f: impl FnOnce(T) -> R) -> Outcome<R> {
+        Outcome {
+            val: f(self.val),
+            err: self.err,
         }
     }
 }

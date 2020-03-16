@@ -34,7 +34,7 @@ impl Codegen for rs::Struct {
 }
 
 impl Codegen for rs::Ty {
-    fn gen(&self, _db: &impl RsIr, f: &mut impl io::Write) -> io::Result<()> {
+    fn gen(&self, db: &impl RsIr, f: &mut impl io::Write) -> io::Result<()> {
         use rs::Ty::*;
         let name = match self {
             Error => "<error>",
@@ -51,7 +51,7 @@ impl Codegen for rs::Ty {
             F32 => "f32",
             F64 => "f64",
             Bool => "bool",
-            Struct(_id) => unimplemented!(),
+            Struct(id) => return write!(f, "{}", id.lookup(db).name),
         };
         write!(f, "{}", name)
     }
@@ -82,6 +82,31 @@ mod tests {
                 e: i8,
                 c: f64,
                 d: f64,
+            }
+        "#);
+    }
+
+    #[test]
+    fn nested_struct() {
+        let mut sess = Session::new();
+        cpp_to_rs!(sess, {
+            // TODO codegen a struct for Foo
+            struct Foo {
+                int a, b;
+            };
+            struct Bar {
+                char c, d;
+                Foo foo;
+            };
+            namespace rust_export {
+                using ::Bar;
+            }
+        } => r#"
+            #[repr(C, align(4))]
+            struct Bar {
+                c: i8,
+                d: i8,
+                foo: Foo,
             }
         "#);
     }

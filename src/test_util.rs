@@ -2,6 +2,8 @@ use crate::ir::cc::RsIr;
 use crate::{codegen, ir, libclang, Session};
 use clang::{self, TranslationUnit, Unsaved};
 use lazy_static::lazy_static;
+use pretty_assertions::assert_eq;
+use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -94,5 +96,13 @@ pub(crate) fn check_codegen(sess: &mut Session, src: &str, expected: &str) {
 
     let expected = expected.trim_matches('\n');
     let output = output.trim_matches('\n');
-    assert_eq!(&expected, &output);
+    assert_eq!(MultilineStr(&expected), MultilineStr(&output));
+}
+
+#[derive(Eq, PartialEq)]
+struct MultilineStr<'a>(&'a str);
+impl fmt::Debug for MultilineStr<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }

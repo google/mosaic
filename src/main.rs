@@ -17,7 +17,7 @@ mod salsa_test;
 
 use crate::diagnostics::DiagnosticsCtx;
 use salsa;
-use std::env;
+use std::{env, io};
 
 pub(crate) use libclang::File;
 
@@ -84,8 +84,9 @@ fn main() -> Result<(), libclang::Error> {
 
     match rs_module.to_ref().val() {
         Ok(rs_module) => {
-            let errs = codegen::perform_codegen(&sess, &rs_module).errs();
-            errs.emit(&sess.db, &sess.diags);
+            let out = io::stdout();
+            let mut out = out.lock();
+            codegen::perform_codegen(&sess.db, &rs_module, &mut out).expect("Codegen failed");
         }
         Err(errs) => errs.clone().emit(&sess.db, &sess.diags),
     };

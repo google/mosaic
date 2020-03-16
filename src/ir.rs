@@ -472,30 +472,6 @@ pub mod rs {
         }
     }
 
-    impl fmt::Display for Ty {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            use Ty::*;
-            let name = match self {
-                Error => "<error>",
-                U8 => "u8",
-                I8 => "i8",
-                U16 => "u16",
-                I16 => "i16",
-                U32 => "u32",
-                I32 => "i32",
-                U64 => "u64",
-                I64 => "i64",
-                USize => "usize",
-                ISize => "isize",
-                F32 => "f32",
-                F64 => "f64",
-                Bool => "bool",
-                Struct(_id) => unimplemented!(),
-            };
-            write!(f, "{}", name)
-        }
-    }
-
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Field {
         pub name: Ident,

@@ -1,5 +1,5 @@
 use crate::ir::cc::RsIr;
-use crate::{ir, libclang, Session};
+use crate::{codegen, ir, libclang, Session};
 use clang::{self, TranslationUnit, Unsaved};
 use lazy_static::lazy_static;
 use std::path::Path;
@@ -22,10 +22,35 @@ macro_rules! cpp_lower {
     };
 }
 
-pub(crate) fn parse<'c>(index: &'c clang::Index, src: &str) -> TranslationUnit<'c> {
+macro_rules! cpp_to_rs {
+    { $sess:expr, $src:tt => $out:expr } => {
+        $crate::test_util::check_codegen(&mut $sess, stringify!($src), $out)
+    };
+}
+
+fn strip_tt(src: &str) -> &str {
     assert!(src.starts_with('{'));
     assert!(src.ends_with('}'));
-    let src = &src[1..src.len() - 1];
+    &src[1..src.len() - 1]
+}
+
+fn strip_indent(src: &str) -> String {
+    let indent = src
+        .lines()
+        .map(|l| l.bytes().position(|c| c != b' '))
+        .flatten()
+        .min()
+        .unwrap_or(0);
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        out += &line.get(indent..).unwrap_or("");
+        out += "\n";
+    }
+    out
+}
+
+pub(crate) fn parse<'c>(index: &'c clang::Index, src: &str) -> TranslationUnit<'c> {
+    let src = strip_tt(src);
     let test_filename = Path::new("__test__/test.cc");
     let mut parser = libclang::configure(index.parser(&test_filename));
     let unsaved = Unsaved::new(&test_filename, src);
@@ -57,4 +82,17 @@ pub(crate) fn parse_and_lower(
         "did not get the expected set of lowering errors"
     );
     rust_ir.clone()
+}
+
+pub(crate) fn check_codegen(sess: &mut Session, src: &str, expected: &str) {
+    let expected = strip_indent(expected);
+
+    let rs_module = parse_and_lower(sess, src, vec![]);
+    let mut out = vec![];
+    codegen::perform_codegen(&sess.db, &rs_module, &mut out).expect("Codegen failed");
+    let output = String::from_utf8(out).expect("Generated code is not UTF-8");
+
+    let expected = expected.trim_matches('\n');
+    let output = output.trim_matches('\n');
+    assert_eq!(&expected, &output);
 }

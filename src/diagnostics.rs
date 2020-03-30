@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Diagnostics API.
 
 // Right now this is implemented on top of codespan, but fixes a few things I
@@ -87,8 +85,6 @@ pub mod db {
     }
 }
 
-//pub use codespan::FileId;
-
 pub use db::FileId;
 
 /// The source code associated with an object.
@@ -124,8 +120,13 @@ struct CtxInner {
 }
 
 enum Mode {
-    Term { writer: termcolor::StandardStream },
-    Test { errs: Vec<String> },
+    Term {
+        writer: termcolor::StandardStream,
+    },
+    #[allow(dead_code)]
+    Test {
+        errs: Vec<String>,
+    },
 }
 
 type Count = u32;
@@ -134,6 +135,7 @@ struct Counts {
     bugs: Count,
     errors: Count,
     warns: Count,
+    #[allow(dead_code)]
     infos: Count,
     helps: Count,
 }
@@ -159,6 +161,7 @@ impl DiagnosticsCtx {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn get_test(&self) -> Vec<String> {
         match &self.0.borrow().mode {
             Mode::Test { errs } => errs.clone(),
@@ -175,6 +178,7 @@ impl DiagnosticsCtx {
         self.0.borrow().counts.errors > 0
     }
 
+    #[allow(dead_code)]
     fn clone(&self) -> Self {
         DiagnosticsCtx(Rc::clone(&self.0))
     }

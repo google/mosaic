@@ -21,7 +21,7 @@ use std::{env, io};
 pub(crate) use libclang::File;
 
 #[salsa::database(
-    libclang::db::AstMethodsStorage,
+    libclang::AstMethodsStorage,
     diagnostics::db::BasicFileCacheStorage,
     ir::cc::RsIrStorage
 )]
@@ -29,7 +29,7 @@ pub struct Database {
     runtime: salsa::Runtime<Database>,
 }
 
-pub trait FileInterner: libclang::db::AstMethods {}
+pub trait FileInterner: libclang::AstMethods {}
 impl FileInterner for Database {}
 
 impl salsa::Database for Database {

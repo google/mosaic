@@ -141,7 +141,7 @@ mod common {
 /// C++ intermediate representation.
 pub mod cc {
     use super::*;
-    use crate::libclang::db::AstMethods;
+    use crate::libclang::AstMethods;
     use std::sync::Arc;
 
     pub use common::{Align, Ident, Offset, Path, Size};

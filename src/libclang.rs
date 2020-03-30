@@ -17,14 +17,11 @@ use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub(crate) mod db;
+mod db;
+use db::with_ast;
+pub(crate) use db::{set_ast, AstMethods, AstMethodsStorage};
 
 pub type Error = SourceError;
-
-thread_local! {
-    // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
-    static AST_CONTEXT: RefCell<Option<db::AstContext>> = RefCell::new(None);
-}
 
 struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
 struct InternerInner<T: Hash + Eq, Id> {
@@ -80,33 +77,6 @@ impl<'tu> AstContextInner<'tu> {
             exports: Interner::new(),
         }
     }
-}
-
-pub(crate) fn set_ast<R>(
-    db: &mut crate::Database,
-    ctx: db::AstContext,
-    f: impl FnOnce(&crate::Database) -> R,
-) -> R {
-    use salsa::Database;
-    db.query_mut(db::AstContextQuery).invalidate(&());
-    AST_CONTEXT.with(|cx| *cx.borrow_mut() = Some(ctx));
-    let res = f(db);
-    AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
-    res
-}
-
-fn with_ast<R>(
-    db: &impl db::AstMethods,
-    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ AstContextInner<'tu>) -> R,
-) -> R {
-    // Report that we're reading the ast context.
-    db.ast_context();
-    AST_CONTEXT.with(|ctx| {
-        ctx.borrow_mut()
-            .as_mut()
-            .expect("with_ast called with no ast defined")
-            .with(f)
-    })
 }
 
 pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::AstContext {

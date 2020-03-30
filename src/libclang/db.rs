@@ -1,4 +1,7 @@
+use super::AstContextInner;
 use crate::{diagnostics::Outcome, ir};
+use clang::TranslationUnit;
+use core::cell::RefCell;
 use std::cmp::{Eq, PartialEq};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
@@ -22,6 +25,38 @@ fn ast_context(db: &(impl AstMethods + salsa::Database)) {
 
 fn cc_ir_from_src(db: &impl AstMethods) -> Arc<Outcome<ir::cc::Module>> {
     Arc::new(super::lower_ast(db))
+}
+
+thread_local! {
+    // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
+    static AST_CONTEXT: RefCell<Option<AstContext>> = RefCell::new(None);
+}
+
+pub(crate) fn set_ast<R>(
+    db: &mut crate::Database,
+    ctx: AstContext,
+    f: impl FnOnce(&crate::Database) -> R,
+) -> R {
+    use salsa::Database;
+    db.query_mut(AstContextQuery).invalidate(&());
+    AST_CONTEXT.with(|cx| *cx.borrow_mut() = Some(ctx));
+    let res = f(db);
+    AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
+    res
+}
+
+pub(super) fn with_ast<R>(
+    db: &impl AstMethods,
+    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ AstContextInner<'tu>) -> R,
+) -> R {
+    // Report that we're reading the ast context.
+    db.ast_context();
+    AST_CONTEXT.with(|ctx| {
+        ctx.borrow_mut()
+            .as_mut()
+            .expect("with_ast called with no ast defined")
+            .with(f)
+    })
 }
 
 // All of the clang types have a lifetime parameter, but salsa doesn't support
@@ -62,7 +97,7 @@ rental! {
         pub(super) struct AstContext {
             #[subrental = 3]
             tu: Arc<Tu>,
-            result: super::super::AstContextInner<'tu_2>,
+            result: AstContextInner<'tu_2>,
         }
     }
 }

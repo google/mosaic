@@ -156,50 +156,11 @@ impl File {
     }
 }
 
-#[derive(Clone, Debug)]
-enum AstKind<'tu> {
-    Entity(clang::Entity<'tu>),
-    Type(clang::Type<'tu>),
-}
-impl<'tu> AstKind<'tu> {
-    fn entity(&self) -> Option<clang::Entity<'tu>> {
-        match self {
-            AstKind::Entity(ent) => Some(*ent),
-            _ => None,
-        }
-    }
-    fn ty(&self) -> Option<clang::Type<'tu>> {
-        match self {
-            AstKind::Type(ty) => Some(*ty),
-            _ => None,
-        }
-    }
-}
-impl<'tu> From<clang::Entity<'tu>> for AstKind<'tu> {
-    fn from(from: clang::Entity<'tu>) -> AstKind<'tu> {
-        AstKind::Entity(from)
-    }
-}
-impl<'tu> From<clang::Type<'tu>> for AstKind<'tu> {
-    fn from(from: clang::Type<'tu>) -> AstKind<'tu> {
-        AstKind::Type(from)
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Export<'tu> {
     Decl(Entity<'tu>),
     Type(HashType<'tu>),
     TemplateType(Entity<'tu>),
-}
-impl<'tu> Export<'tu> {
-    fn get(&self) -> AstKind {
-        match self {
-            Export::Decl(ent) => AstKind::Entity(*ent),
-            Export::Type(ty) => AstKind::Type(ty.0),
-            Export::TemplateType(ent) => AstKind::Entity(*ent),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

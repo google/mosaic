@@ -19,31 +19,6 @@ trait Test {
     fn index<'i>(&'i self) -> Arc<clang::Index<'i>>;
 }
 
-//fn index<'i>(db: &'i impl CcIrFromSrc) -> Arc<clang::Index<'i>> {
-//    Arc::new(clang::Index::new(&*db.clang(), false, false))
-//}
-
-//fn index() -> Arc<AstIndex> {
-//    let clang = Arc::new(clang::Clang::new().unwrap());
-//    Arc::new(AstIndex::new(clang, |cl| {
-//        clang::Index::new(&*cl, false, false)
-//    }))
-//}
-
-//fn parse_file(path: &std::path::Path) -> Arc<AstTu> {
-//    let index = index();
-//    Arc::new(AstTu::new(index, |i| {
-//        let parser = i.index.parser(path);
-//        parser.parse().unwrap()
-//    }))
-//}
-
-//fn index() -> ! {
-//    let clang = ArcRef::new(Arc::new(clang::Clang::new().unwrap()));
-//    let index = clang.map(|cl| clang::Index::new(&*clang, false, false));
-//    panic!()
-//}
-
 #[salsa::query_group(CcIrFromRsStorage)]
 pub trait CcIrFromRs {
     fn cc_ir_from_rs(&self) -> IR;

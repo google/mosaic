@@ -21,12 +21,24 @@ trait Codegen {
     fn gen(&self, db: &impl RsIr, f: &mut impl io::Write) -> io::Result<()>;
 }
 
+impl Codegen for rs::Visibility {
+    fn gen(&self, _db: &impl RsIr, f: &mut impl io::Write) -> io::Result<()> {
+        Ok(match self {
+            rs::Visibility::Public => write!(f, "pub ")?,
+            rs::Visibility::Private => (),
+        })
+    }
+}
+
 impl Codegen for rs::Struct {
     fn gen(&self, db: &impl RsIr, f: &mut impl io::Write) -> io::Result<()> {
         writeln!(f, "#[repr(C, align({}))]", self.align)?;
+        self.vis.gen(db, f)?;
         writeln!(f, "struct {} {{", self.name)?;
         for field in &self.fields {
-            write!(f, "    {}: ", field.name)?;
+            write!(f, "    ")?;
+            field.vis.gen(db, f)?;
+            write!(f, "{}: ", field.name)?;
             field.ty.gen(db, f)?;
             writeln!(f, ",")?;
         }
@@ -78,12 +90,12 @@ mod tests {
             }
         } => r#"
             #[repr(C, align(8))]
-            struct Pod {
-                a: i32,
-                b: i32,
-                e: i8,
-                c: f64,
-                d: f64,
+            pub struct Pod {
+                pub a: i32,
+                pub b: i32,
+                pub e: i8,
+                pub c: f64,
+                pub d: f64,
             }
         "#);
     }
@@ -106,13 +118,13 @@ mod tests {
         } => r#"
             #[repr(C, align(4))]
             struct Foo {
-                a: i32,
-                b: i32,
+                pub a: i32,
+                pub b: i32,
             }
             #[repr(C, align(4))]
-            struct Bar {
-                c: i8,
-                d: i8,
+            pub struct Bar {
+                pub c: i8,
+                pub d: i8,
                 foo: Foo,
             }
         "#);

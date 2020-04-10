@@ -171,13 +171,18 @@ pub mod cc {
 
     fn rs_struct_from_cc(db: &(impl AstMethods + RsIr), id: cc::StructId) -> Outcome<rs::StructId> {
         id.lookup(db)
-            .to_rust(db)
+            .to_rust(db, id)
             .then(|rs_st| ok(db.intern_struct(rs_st)))
     }
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
     pub enum ItemKind {
         Struct(StructId),
+    }
+    impl From<StructId> for ItemKind {
+        fn from(st: StructId) -> Self {
+            ItemKind::Struct(st)
+        }
     }
 
     /// A set of C++ items being exposed to Rust. This is the top level of the IR
@@ -285,8 +290,33 @@ pub mod cc {
             }
         }
 
+        pub fn is_builtin(&self) -> bool {
+            use Ty::*;
+            match self {
+                Error => false,
+                Float | Double => true,
+                Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS
+                | CharU | SChar | UChar | Size | SSize | PtrDiff => true,
+                Bool => true,
+                Struct(_) => false,
+            }
+        }
+
         pub fn is_error(&self) -> bool {
             self == &Ty::Error
+        }
+
+        pub fn is_visible(&self, db: &impl AstMethods) -> bool {
+            match self {
+                Ty::Struct(id) => db
+                    .cc_ir_from_src()
+                    .to_ref()
+                    .skip_errs()
+                    .exports
+                    .contains(&id.clone().into()),
+                _ if self.is_builtin() => true,
+                _ => unreachable!(),
+            }
         }
 
         pub fn to_rust(&self, db: &impl RsIr) -> Outcome<rs::Ty> {
@@ -333,7 +363,7 @@ pub mod cc {
     }
 
     impl Struct {
-        pub fn to_rust(&self, db: &impl RsIr) -> Outcome<rs::Struct> {
+        pub fn to_rust(&self, db: &(impl RsIr + AstMethods), id: StructId) -> Outcome<rs::Struct> {
             let fields = self
                 .fields
                 .iter()
@@ -342,14 +372,28 @@ pub mod cc {
                         name: f.name.clone(),
                         ty,
                         span: f.span.clone(),
+                        // Long term we probably don't want to condition
+                        // visibility on the visibility of the type (instead
+                        // controlling visibility with inner modules and `pub
+                        // use`), but this works well for now.
+                        vis: match f.ty.is_visible(db) {
+                            true => rs::Visibility::Public,
+                            false => rs::Visibility::Private,
+                        },
                     })
                 })
                 .collect::<Outcome<Vec<_>>>();
+            let mdl = db.cc_ir_from_src();
+            let mdl = mdl.to_ref().skip_errs();
             fields.then(|fields| {
                 self.check_offsets(db, &fields).map(|()| rs::Struct {
                     name: self.name.clone(),
                     fields,
                     offsets: self.offsets.clone(),
+                    vis: match mdl.exports.contains(&id.into()) {
+                        true => rs::Visibility::Public,
+                        false => rs::Visibility::Private,
+                    },
                     repr: rs::Repr::C,
                     size: self.size,
                     align: self.align,
@@ -496,11 +540,18 @@ pub mod rs {
         }
     }
 
+    #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+    pub enum Visibility {
+        Public,
+        Private,
+    }
+
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Field {
         pub name: Ident,
         pub ty: Ty,
         pub span: Span,
+        pub vis: Visibility,
     }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -515,6 +566,7 @@ pub mod rs {
         pub name: Path,
         pub fields: Vec<Field>,
         pub offsets: Vec<Offset>,
+        pub vis: Visibility,
         pub repr: Repr,
         pub size: Size,
         pub align: Align,

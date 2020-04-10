@@ -12,7 +12,6 @@ use core::hash::Hasher;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::error::Error as _;
 use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -205,7 +204,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
     fn lower(&mut self, exports: &Vec<(Path, Export<'tu>)>) -> Outcome<cc::Module> {
         //let mut visitor = AstVisitor::new(&self);
         let mut outcome = ok(());
-        let mut mdl = cc::Module::new();
+        let mut mdl = cc::Module::default();
         for (name, export) in exports {
             outcome = outcome.then(|()| self.lower_export(name, export, &mut mdl));
         }
@@ -214,7 +213,11 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
 
     fn lower_export(&self, name: &Path, export: &Export<'tu>, mdl: &mut Module) -> Outcome<()> {
         match export {
-            Export::Decl(decl_ref) => self.lower_decl(name, *decl_ref, mdl),
+            Export::Decl(decl_ref) => self.lower_decl(name, *decl_ref, mdl).map(|item| {
+                if let Some(kind) = item {
+                    mdl.exports.insert(kind);
+                }
+            }),
             Export::Type(ty) => {
                 println!("{} = {:?}", name, ty);
                 println!(
@@ -248,7 +251,12 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower_decl(&self, name: &Path, decl_ref: Entity<'tu>, mdl: &mut cc::Module) -> Outcome<()> {
+    fn lower_decl(
+        &self,
+        name: &Path,
+        decl_ref: Entity<'tu>,
+        mdl: &mut cc::Module,
+    ) -> Outcome<Option<cc::ItemKind>> {
         let overloads = decl_ref.get_overloaded_declarations().unwrap();
         assert_eq!(overloads.len(), 1);
         let ent = overloads[0];
@@ -259,15 +267,12 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         }
 
         match ent.get_kind() {
-            EntityKind::StructDecl => self.lower_struct(name, ent).then(|st| {
-                if let Some(st) = st {
-                    mdl.add_struct(st);
-                }
-                ok(())
-            }),
+            EntityKind::StructDecl => self
+                .lower_struct(name, ent, mdl)
+                .map(|st| st.map(cc::ItemKind::Struct)),
             //other => eprintln!("{}: Unsupported type {:?}", name, other),
             other => err(
-                (),
+                None,
                 Diagnostic::error(
                     format!("unsupported item type {:?}", other),
                     self.span(ent).label("only structs are supported"),
@@ -276,7 +281,12 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower_struct(&self, name: &Path, ent: Entity<'tu>) -> Outcome<Option<cc::StructId>> {
+    fn lower_struct(
+        &self,
+        name: &Path,
+        ent: Entity<'tu>,
+        mdl: &mut cc::Module,
+    ) -> Outcome<Option<cc::StructId>> {
         assert_eq!(ent.get_kind(), EntityKind::StructDecl);
 
         let ty = ent.get_type().unwrap();
@@ -301,7 +311,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                         "incomplete or dependent type",
                         self.span(ent).label("only complete types can be exported"),
                     )
-                    .with_note(e.description()),
+                    .with_note(e.to_string()),
                 );
             }
         };
@@ -322,7 +332,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                 // Don't "peer through" anonymous struct/union fields, for now.
                 None => continue,
             };
-            let (ty, field_ty_errs) = field.get_type().unwrap().lower(self).split();
+            let (ty, field_ty_errs) = field.get_type().unwrap().lower(self, mdl).split();
             errs.append(field_ty_errs);
             fields.push(Field {
                 name: Ident::from(field_name),
@@ -348,14 +358,16 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             offsets.push(offset / 8);
         }
 
-        ok(Some(self.db.intern_cc_struct(cc::Struct {
+        let st = self.db.intern_cc_struct(cc::Struct {
             name: name.clone(),
             fields,
             offsets,
             size: cc::Size::new(size),
             align: cc::Align::new(align),
             span: self.span(ent),
-        })))
+        });
+        mdl.add_struct(st);
+        ok(Some(st))
     }
 
     fn span(&self, ent: Entity<'tu>) -> Span {
@@ -389,12 +401,20 @@ fn maybe_span_from_range<'tu>(
 
 trait Lower<'ctx, 'tu> {
     type Output;
-    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty>;
+    fn lower<DB: db::AstMethods>(
+        &self,
+        ctx: &LowerCtx<'ctx, 'tu, DB>,
+        mdl: &mut cc::Module,
+    ) -> Outcome<Ty>;
 }
 
 impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
     type Output = Ty;
-    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty> {
+    fn lower<DB: db::AstMethods>(
+        &self,
+        ctx: &LowerCtx<'ctx, 'tu, DB>,
+        mdl: &mut cc::Module,
+    ) -> Outcome<Ty> {
         use TypeKind::*;
         ok(match self.get_kind() {
             Int => Ty::Int,
@@ -408,8 +428,8 @@ impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
             Record => {
                 let decl = self.get_declaration().unwrap();
                 return ctx
-                    .lower_struct(&Path::from(self.get_display_name()), decl)
-                    .then(|st| ok(st.map_or(Ty::Error, |st| Ty::Struct(st))));
+                    .lower_struct(&Path::from(self.get_display_name()), decl, mdl)
+                    .map(|st| st.map_or(Ty::Error, |st| Ty::Struct(st)));
             }
             _ => panic!("unsupported type {:?}", self),
         })

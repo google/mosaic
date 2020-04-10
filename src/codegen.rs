@@ -9,8 +9,10 @@ pub fn perform_codegen(
     mdl: &rs::Module,
     out: &mut impl io::Write,
 ) -> io::Result<()> {
-    for (_, st) in mdl.structs(db) {
-        st.gen(db, out)?;
+    for item in &mdl.items {
+        match item {
+            rs::ItemKind::Struct(st) => st.lookup(db).gen(db, out)?,
+        }
     }
     Ok(())
 }
@@ -102,6 +104,11 @@ mod tests {
                 using ::Bar;
             }
         } => r#"
+            #[repr(C, align(4))]
+            struct Foo {
+                a: i32,
+                b: i32,
+            }
             #[repr(C, align(4))]
             struct Bar {
                 c: i8,

@@ -9,6 +9,7 @@
 //! language IR can be represented in the other.
 
 use crate::diagnostics::{err, ok, Diagnostic, Outcome, Span};
+use std::collections::HashSet;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
 
@@ -174,37 +175,55 @@ pub mod cc {
             .then(|rs_st| ok(db.intern_struct(rs_st)))
     }
 
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+    pub enum ItemKind {
+        Struct(StructId),
+    }
+
     /// A set of C++ items being exposed to Rust. This is the top level of the IR
     /// representation.
-    #[derive(Debug, Eq, PartialEq)]
+    #[derive(Default, Debug, Eq, PartialEq)]
     pub struct Module {
-        structs: Vec<StructId>,
+        pub items: Vec<ItemKind>,
+        pub exports: HashSet<ItemKind>,
     }
     impl Module {
-        pub fn new() -> Module {
-            Module { structs: vec![] }
-        }
-
-        #[allow(dead_code)]
-        pub fn structs<'a>(
-            &'a self,
-            db: &'a impl AstMethods,
-        ) -> impl Iterator<Item = (StructId, Struct)> + 'a {
-            self.structs.iter().map(move |i| (*i, i.lookup(db)))
+        pub fn structs<'a>(&'a self) -> impl Iterator<Item = StructId> + 'a {
+            self.items.iter().flat_map(|item| match item {
+                ItemKind::Struct(id) => Some(*id),
+            })
         }
 
         pub fn add_struct(&mut self, st: StructId) {
-            self.structs.push(st);
+            self.items.push(ItemKind::Struct(st));
         }
     }
 
     impl Module {
         pub fn to_rust(&self, db: &(impl RsIr + AstMethods)) -> Outcome<rs::Module> {
-            self.structs
+            self.items
                 .iter()
-                .map(|cc_id| db.rs_struct_from_cc(*cc_id))
+                .map(|cc_id| {
+                    let item = match cc_id {
+                        ItemKind::Struct(st) => db.rs_struct_from_cc(*st),
+                    };
+                    item.map(|i| (cc_id, i))
+                })
                 .collect::<Outcome<Vec<_>>>()
-                .then(|structs| ok(rs::Module { structs }))
+                .then(|structs| {
+                    let mut exports = HashSet::new();
+                    let items = structs
+                        .iter()
+                        .map(|(cc_id, st)| {
+                            let item = rs::ItemKind::Struct(*st);
+                            if self.exports.contains(cc_id) {
+                                exports.insert(item);
+                            }
+                            item
+                        })
+                        .collect();
+                    ok(rs::Module { items, exports })
+                })
         }
     }
 
@@ -408,17 +427,22 @@ pub mod rs {
         }
     }
 
-    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+    pub enum ItemKind {
+        Struct(StructId),
+    }
+
+    #[derive(Debug, Clone, Eq, PartialEq)]
     pub struct Module {
-        pub(super) structs: Vec<StructId>,
+        pub items: Vec<ItemKind>,
+        pub exports: HashSet<ItemKind>,
     }
 
     impl Module {
-        pub fn structs<'a>(
-            &'a self,
-            db: &'a impl cc::RsIr,
-        ) -> impl Iterator<Item = (StructId, Struct)> + 'a {
-            self.structs.iter().map(move |i| (*i, i.lookup(db)))
+        pub fn exported_structs<'a>(&'a self) -> impl Iterator<Item = StructId> + 'a {
+            self.exports.iter().flat_map(|item| match item {
+                ItemKind::Struct(id) => Some(*id),
+            })
         }
     }
 
@@ -526,7 +550,8 @@ mod tests {
                 using ::Pod;
             }
         });
-        let st = ir.structs[0].lookup(&sess.db);
+        dbg!(&ir);
+        let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
         assert_eq!(
             st.fields
                 .iter()
@@ -584,7 +609,7 @@ mod tests {
                 using ::Bar;
             }
         });
-        let st = ir.structs[0].lookup(&sess.db);
+        let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
         assert_eq!(rs::Size::new(12), st.size);
         assert_eq!(rs::Align::new(4), st.align);
     }
@@ -604,7 +629,7 @@ mod tests {
                 using ::Bar;
             }
         });
-        let st = ir.structs[0].lookup(&sess.db);
+        let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
         assert_eq!(rs::Size::new(16), st.size);
         assert_eq!(rs::Align::new(8), st.align);
     }

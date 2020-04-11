@@ -69,13 +69,10 @@ pub(crate) fn parse_and_lower(
 ) -> ir::rs::Module {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
 
-    let diags = &sess.diags;
-
     let ast = libclang::parse_with(CLANG.clone(), &sess, |index| parse(index, src));
     let (rust_ir, errs) = libclang::set_ast(&mut sess.db, ast, |db| {
         let rs_ir = db.rs_ir();
         let (mdl, errs) = rs_ir.to_ref().split();
-        errs.clone().emit(db, diags);
         (mdl.clone(), errs.clone())
     });
     assert_eq!(

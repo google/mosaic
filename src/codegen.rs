@@ -104,7 +104,6 @@ mod tests {
     fn nested_struct() {
         let mut sess = Session::new();
         cpp_to_rs!(sess, {
-            // TODO codegen a struct for Foo
             struct Foo {
                 int a, b;
             };
@@ -128,5 +127,77 @@ mod tests {
                 foo: Foo,
             }
         "#);
+    }
+
+    // TODO handle these.
+    #[test]
+    #[should_panic(expected = "unsupported type")]
+    fn nested_struct_in_namespace() {
+        let mut sess = Session::new();
+        cpp_to_rs!(sess, {
+            namespace ns {
+                struct Foo {
+                    int a, b;
+                };
+            }
+            struct Bar {
+                char c, d;
+                ns::Foo foo;
+            };
+            namespace rust_export {
+                using ::Bar;
+            }
+        } => r#"
+            #[repr(C, align(4))]
+            struct Foo {
+                pub a: i32,
+                pub b: i32,
+            }
+            #[repr(C, align(4))]
+            pub struct Bar {
+                pub c: i8,
+                pub d: i8,
+                foo: Foo,
+            }
+        "#);
+    }
+
+    #[test]
+    fn export_from_namespace() {
+        let mut sess = Session::new();
+        cpp_to_rs!(sess, {
+            namespace ns {
+                struct Foo {
+                    int a, b;
+                };
+            }
+            namespace rust_export {
+                using ::ns::Foo;
+            }
+        } => r#"
+            #[repr(C, align(4))]
+            pub struct Foo {
+                pub a: i32,
+                pub b: i32,
+            }
+        "#);
+    }
+
+    #[test]
+    fn namespace_in_export() {
+        // Not supported yet.
+        let mut sess = Session::new();
+        cpp_lower!(sess, {
+            struct Foo {
+                int a, b;
+            };
+            namespace rust_export {
+                namespace ns {
+                    using ::Foo;
+                }
+            }
+        } => [
+            "invalid rust_export item"
+        ]);
     }
 }

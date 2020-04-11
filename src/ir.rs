@@ -685,4 +685,21 @@ mod tests {
         assert_eq!(rs::Size::new(16), st.size);
         assert_eq!(rs::Align::new(8), st.align);
     }
+
+    // TODO don't panic and report clang diagnostics
+    #[test]
+    #[should_panic]
+    fn bad_export() {
+        let mut sess = Session::test();
+        cpp_lower!(sess, {
+            struct Pod {
+                int a;
+            };
+            namespace rust_export {
+                using ::Missing;
+            }
+        } => [
+            "unknown name"
+        ]);
+    }
 }

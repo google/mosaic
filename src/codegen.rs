@@ -129,6 +129,22 @@ mod tests {
         "#);
     }
 
+    #[test]
+    fn method() {
+        let mut sess = Session::new();
+        cpp_lower!(sess, {
+            struct Foo {
+                int a, b;
+                int sum(int c) const;
+            };
+            namespace rust_export {
+                using ::Foo;
+            }
+        } => [
+            "unhandled child of struct"
+        ]);
+    }
+
     // TODO handle these.
     #[test]
     #[should_panic(expected = "unsupported type")]

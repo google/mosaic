@@ -79,16 +79,18 @@ fn main() -> Result<(), libclang::Error> {
     let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
 
     let parse = libclang::parse(&sess, &filename.into());
-    let rs_module = libclang::set_ast(&mut sess.db, parse, |db| db.rs_ir());
-
-    match rs_module.to_ref().val() {
-        Ok(rs_module) => {
-            let out = io::stdout();
-            let mut out = out.lock();
-            codegen::perform_codegen(&sess.db, &rs_module, &mut out).expect("Codegen failed");
-        }
-        Err(errs) => errs.clone().emit(&sess.db, &sess.diags),
-    };
+    let diags = &sess.diags;
+    libclang::set_ast(&mut sess.db, parse, |db| {
+        let rs_module = db.rs_ir();
+        match rs_module.to_ref().val() {
+            Ok(rs_module) => {
+                let out = io::stdout();
+                let mut out = out.lock();
+                codegen::perform_codegen(db, &rs_module, &mut out).expect("Codegen failed");
+            }
+            Err(errs) => errs.clone().emit(db, diags),
+        };
+    });
 
     Ok(())
 }

@@ -5,8 +5,8 @@ use crate::{
     Session,
 };
 use clang::{
-    self, source, source::SourceRange, Accessibility, Clang, Entity, EntityKind, Parser,
-    SourceError, TranslationUnit, Type, TypeKind,
+    self, source, source::SourceRange, Accessibility, Clang, Entity, EntityKind, EntityVisitResult,
+    Parser, SourceError, TranslationUnit, Type, TypeKind,
 };
 use core::hash::Hasher;
 use std::cell::RefCell;
@@ -317,57 +317,105 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         };
         let align = ty.get_alignof().unwrap().try_into().expect("align too big");
 
-        let ty_fields = ty.get_fields().unwrap();
-        let mut fields = Vec::with_capacity(ty_fields.len());
-        let mut offsets = Vec::with_capacity(ty_fields.len());
+        let mut fields = vec![];
+        let mut offsets = vec![];
         let mut errs = Diagnostics::new();
-        for field in ty_fields {
-            if let Some(acc) = field.get_accessibility() {
-                if Accessibility::Public != acc {
-                    continue;
+        let mut keep_going = true;
+        ent.visit_children(|child, _| {
+            keep_going = match child.get_kind() {
+                EntityKind::FieldDecl => {
+                    self.lower_field(child, mdl, &mut fields, &mut offsets, &mut errs)
                 }
-            }
-            let field_name = match field.get_name() {
-                Some(name) => name,
-                // Don't "peer through" anonymous struct/union fields, for now.
-                None => continue,
+                EntityKind::PackedAttr => {
+                    errs.add(Diagnostic::error(
+                        "packed structs not supported",
+                        self.span(child).label("this attribute is not allowed"),
+                    ));
+                    false
+                }
+                EntityKind::UnexposedAttr => {
+                    errs.add(Diagnostic::warn(
+                        "unknown attribute",
+                        self.span(child).label("this attribute is not recognized"),
+                    ));
+                    true
+                }
+                _ => {
+                    errs.add(Diagnostic::error(
+                        "unhandled child of struct",
+                        self.span(child)
+                            .label("this kind of item is not handled yet"),
+                    ));
+                    #[cfg(test)]
+                    eprintln!("unhandled child: {:?}", child);
+                    true
+                }
             };
-            let (ty, field_ty_errs) = field.get_type().unwrap().lower(self, mdl).split();
-            errs.append(field_ty_errs);
-            fields.push(Field {
-                name: Ident::from(field_name),
-                ty,
-                span: self.span(field),
-            });
-            let offset: u16 = field
-                .get_offset_of_field()
-                .unwrap()
-                .try_into()
-                .expect("offset too big");
-            // TODO put this in a helper
-            if offset % 8 != 0 {
-                return err(
-                    None,
-                    Diagnostic::error(
-                        "bitfields are not supported",
-                        self.span(field)
-                            .label("only fields at byte offsets are supported"),
-                    ),
-                );
+            if keep_going {
+                EntityVisitResult::Continue
+            } else {
+                EntityVisitResult::Break
             }
-            offsets.push(offset / 8);
-        }
-
-        let st = self.db.intern_cc_struct(cc::Struct {
-            name: name.clone(),
-            fields,
-            offsets,
-            size: cc::Size::new(size),
-            align: cc::Align::new(align),
-            span: self.span(ent),
         });
-        mdl.add_struct(st);
-        ok(Some(st))
+
+        let st = if keep_going {
+            let st = self.db.intern_cc_struct(cc::Struct {
+                name: name.clone(),
+                fields,
+                offsets,
+                size: cc::Size::new(size),
+                align: cc::Align::new(align),
+                span: self.span(ent),
+            });
+            mdl.add_struct(st);
+            Some(st)
+        } else {
+            None
+        };
+        Outcome::from_parts(st, errs)
+    }
+
+    fn lower_field(
+        &self,
+        field: Entity<'tu>,
+        mdl: &mut cc::Module,
+        fields: &mut Vec<Field>,
+        offsets: &mut Vec<u16>,
+        errs: &mut Diagnostics,
+    ) -> bool {
+        if let Some(acc) = field.get_accessibility() {
+            if Accessibility::Public != acc {
+                return true;
+            }
+        }
+        let field_name = match field.get_name() {
+            Some(name) => name,
+            // Don't "peer through" anonymous struct/union fields, for now.
+            None => return true,
+        };
+        let (ty, field_ty_errs) = field.get_type().unwrap().lower(self, mdl).split();
+        errs.append(field_ty_errs);
+        fields.push(Field {
+            name: Ident::from(field_name),
+            ty,
+            span: self.span(field),
+        });
+        let offset: u16 = field
+            .get_offset_of_field()
+            .unwrap()
+            .try_into()
+            .expect("offset too big");
+        // TODO put this in a helper
+        if offset % 8 != 0 {
+            errs.add(Diagnostic::error(
+                "bitfields are not supported",
+                self.span(field)
+                    .label("only fields at byte offsets are supported"),
+            ));
+            return false;
+        }
+        offsets.push(offset / 8);
+        true
     }
 
     fn span(&self, ent: Entity<'tu>) -> Span {

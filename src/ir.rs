@@ -627,7 +627,7 @@ mod tests {
                 using ::Pod;
             }
         } => [
-            "unexpected field offset"
+            "packed structs not supported"
         ]);
     }
 
@@ -680,7 +680,9 @@ mod tests {
             namespace rust_export {
                 using ::Bar;
             }
-        });
+        } => [
+            "unknown attribute"  // warning
+        ]);
         let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
         assert_eq!(rs::Size::new(16), st.size);
         assert_eq!(rs::Align::new(8), st.align);

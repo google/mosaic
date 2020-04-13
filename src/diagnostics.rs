@@ -358,6 +358,10 @@ pub struct Outcome<T> {
     err: Diagnostics,
 }
 impl<T> Outcome<T> {
+    pub fn from_parts(val: T, err: Diagnostics) -> Outcome<T> {
+        Outcome { val, err }
+    }
+
     pub fn from_ok(val: T) -> Outcome<T> {
         Outcome {
             val,

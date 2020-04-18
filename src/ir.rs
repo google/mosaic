@@ -147,10 +147,24 @@ pub mod cc {
 
     pub use common::{Align, Ident, Offset, Path, Size};
 
+    intern_key!(TyId);
+    impl TyId {
+        pub fn lookup(&self, db: &impl AstMethods) -> Ty {
+            db.lookup_intern_cc_ty(*self)
+        }
+    }
+
     intern_key!(StructId);
     impl StructId {
         pub fn lookup(&self, db: &impl AstMethods) -> Struct {
             db.lookup_intern_cc_struct(*self)
+        }
+    }
+
+    intern_key!(FunctionId);
+    impl FunctionId {
+        pub fn lookup(&self, db: &impl AstMethods) -> Arc<Function> {
+            db.lookup_intern_cc_fn(*self)
         }
     }
 
@@ -350,6 +364,7 @@ pub mod cc {
         pub name: Path,
         pub fields: Vec<Field>,
         pub offsets: Vec<Offset>,
+        pub methods: Vec<FunctionId>,
         pub size: Size,
         pub align: Align,
         pub span: Span,
@@ -358,8 +373,22 @@ pub mod cc {
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Field {
         pub name: Ident,
-        pub ty: Ty,
+        pub ty: Ty, // TODO intern
         pub span: Span,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+    pub struct Function {
+        pub name: Ident,
+        pub param_tys: Vec<TyId>,
+        pub param_names: Vec<Ident>,
+        pub return_ty: TyId,
+        /// Whether this function is a non-static method.
+        ///
+        /// Methods have an implicit `this` type as their first parameter.
+        pub is_method: bool,
+        /// For non-static methods, whether `this` is const.
+        pub is_const: bool,
     }
 
     impl Struct {

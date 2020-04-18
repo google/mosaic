@@ -319,6 +319,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
 
         let mut fields = vec![];
         let mut offsets = vec![];
+        let mut methods = vec![];
         let mut errs = Diagnostics::new();
         let mut keep_going = true;
         ent.visit_children(|child, _| {
@@ -326,6 +327,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                 EntityKind::FieldDecl => {
                     self.lower_field(child, mdl, &mut fields, &mut offsets, &mut errs)
                 }
+                EntityKind::Method => self.lower_method(child, mdl, &mut methods, &mut errs),
                 EntityKind::PackedAttr => {
                     errs.add(Diagnostic::error(
                         "packed structs not supported",
@@ -363,6 +365,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                 name: name.clone(),
                 fields,
                 offsets,
+                methods,
                 size: cc::Size::new(size),
                 align: cc::Align::new(align),
                 span: self.span(ent),
@@ -415,6 +418,36 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             return false;
         }
         offsets.push(offset / 8);
+        true
+    }
+
+    #[allow(unused)]
+    fn lower_method(
+        &self,
+        method: Entity<'tu>,
+        mdl: &mut cc::Module,
+        methods: &mut Vec<cc::FunctionId>,
+        errs: &mut Diagnostics,
+    ) -> bool {
+        eprintln!("method: {:?}", method);
+        let ty = method.get_type().unwrap();
+        eprintln!("type: {:?}", ty);
+        eprintln!("const: {:?}", method.is_const_method());
+        eprintln!("static: {:?}", method.is_static_method());
+        eprintln!(
+            "virtual: {:?}, pure virtual: {:?}",
+            method.is_virtual_method(),
+            method.is_pure_virtual_method()
+        );
+        method.visit_children(|child, _| {
+            eprintln!("- {:?}: {:?}", child, child.get_type());
+            EntityVisitResult::Continue
+        });
+        for arg_ty in ty.get_argument_types().unwrap() {
+            eprintln!("* {:?}", arg_ty);
+        }
+        eprintln!("returns: {:?}", ty.get_result_type().unwrap());
+        eprintln!("calling convention: {:?}", ty.get_calling_convention());
         true
     }
 

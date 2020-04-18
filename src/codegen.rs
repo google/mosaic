@@ -135,13 +135,12 @@ mod tests {
         cpp_lower!(sess, {
             struct Foo {
                 int a, b;
-                int sum(int c) const;
+                int sum(int c, int) const;
             };
             namespace rust_export {
                 using ::Foo;
             }
         } => [
-            "unhandled child of struct"
         ]);
     }
 

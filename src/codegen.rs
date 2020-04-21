@@ -116,15 +116,15 @@ mod tests {
             }
         } => r#"
             #[repr(C, align(4))]
-            struct Foo {
-                pub a: i32,
-                pub b: i32,
-            }
-            #[repr(C, align(4))]
             pub struct Bar {
                 pub c: i8,
                 pub d: i8,
                 foo: Foo,
+            }
+            #[repr(C, align(4))]
+            struct Foo {
+                pub a: i32,
+                pub b: i32,
             }
         "#);
     }

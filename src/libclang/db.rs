@@ -1,4 +1,4 @@
-use super::AstContextInner;
+use super::{AstContextInner, TypeId};
 use crate::{diagnostics::Outcome, ir};
 use clang::TranslationUnit;
 use core::cell::RefCell;
@@ -12,7 +12,10 @@ pub trait AstMethods {
     #[salsa::dependencies]
     fn ast_context(&self) -> ();
 
-    fn cc_ir_from_src(&self) -> Arc<Outcome<ir::cc::Module>>;
+    fn cc_ir_from_src(&self) -> Arc<Outcome<ir::Module>>;
+
+    #[salsa::invoke(crate::libclang::lower_ty)]
+    fn type_of(&self, id: TypeId) -> Outcome<ir::cc::Ty>;
 
     #[salsa::interned]
     fn intern_cc_ty(&self, st: ir::cc::Ty) -> ir::cc::TyId;
@@ -29,7 +32,7 @@ fn ast_context(db: &(impl AstMethods + salsa::Database)) {
         .report_synthetic_read(salsa::Durability::LOW);
 }
 
-fn cc_ir_from_src(db: &impl AstMethods) -> Arc<Outcome<ir::cc::Module>> {
+fn cc_ir_from_src(db: &impl AstMethods) -> Arc<Outcome<ir::Module>> {
     Arc::new(super::lower_ast(db))
 }
 

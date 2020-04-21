@@ -1,13 +1,13 @@
 use clang::{Entity, Type};
 
 macro_rules! intern_key {
-    ($name:ident) => {
+    ($vis:vis $name:ident) => {
         #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
         pub struct $name(::salsa::InternId);
 
         impl $name {
             #[allow(dead_code)]
-            pub(super) fn new(v: u32) -> Self {
+            $vis fn new(v: u32) -> Self {
                 Self(::salsa::InternId::from(v))
             }
         }

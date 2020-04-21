@@ -23,6 +23,7 @@ pub(crate) use libclang::File;
 #[salsa::database(
     libclang::AstMethodsStorage,
     diagnostics::db::BasicFileCacheStorage,
+    ir::IrMethodsStorage,
     ir::cc::RsIrStorage
 )]
 pub struct Database {
@@ -81,7 +82,7 @@ fn main() -> Result<(), libclang::Error> {
     let parse = libclang::parse(&sess, &filename.into());
     let diags = &sess.diags;
     libclang::set_ast(&mut sess.db, parse, |db| {
-        let rs_module = db.rs_ir();
+        let rs_module = db.rs_bindings();
         match rs_module.to_ref().val() {
             Ok(rs_module) => {
                 let out = io::stdout();

@@ -9,9 +9,177 @@
 //! language IR can be represented in the other.
 
 use crate::diagnostics::{err, ok, Diagnostic, Outcome, Span};
-use std::collections::HashSet;
+use crate::libclang::AstMethods;
+use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroU16;
 use std::{fmt, iter};
+
+#[salsa::query_group(IrMethodsStorage)]
+pub trait IrMethods {
+    #[salsa::interned]
+    fn intern_def(&self, def: DefKind) -> Def;
+}
+
+/// A top-level defintion of some kind.
+///
+/// A Def can be defined in either C++ or Rust.
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub enum DefKind {
+    CcDef(cc::ItemKind),
+}
+impl From<cc::ItemKind> for DefKind {
+    fn from(item: cc::ItemKind) -> Self {
+        DefKind::CcDef(item)
+    }
+}
+impl From<cc::StructId> for DefKind {
+    fn from(item: cc::StructId) -> Self {
+        DefKind::CcDef(item.into())
+    }
+}
+
+intern_key!(Def);
+impl Def {
+    pub fn lookup(&self, db: &impl IrMethods) -> DefKind {
+        db.lookup_intern_def(*self)
+    }
+}
+
+#[derive(Default, Debug, Eq, PartialEq)]
+pub struct Module {
+    pub exports: Vec<DefKind>,
+}
+impl Module {
+    pub fn reachable_items<'db>(
+        &self,
+        db: &'db (impl IrMethods + AstMethods),
+    ) -> impl Iterator<Item = DefKind> + 'db {
+        let queue = self.exports.iter().cloned().collect();
+        ReachableIter { db, queue }
+    }
+
+    pub fn to_rs_bindings(
+        &self,
+        db: &(impl IrMethods + cc::RsIr + AstMethods),
+    ) -> Outcome<rs::Module> {
+        self.reachable_items(db)
+            .map(|def| {
+                let item = match def {
+                    DefKind::CcDef(cc::ItemKind::Struct(st)) => db.rs_struct_from_cc(st),
+                };
+                item.map(|i| (def, i))
+            })
+            .collect::<Outcome<Vec<_>>>()
+            .then(|structs| {
+                let mut exports = HashSet::new();
+                let items = structs
+                    .iter()
+                    .map(|(def, st)| {
+                        let item = rs::ItemKind::Struct(*st);
+                        if self.exports.contains(def) {
+                            exports.insert(item);
+                        }
+                        item
+                    })
+                    .collect();
+                ok(rs::Module { items, exports })
+            })
+    }
+}
+
+struct ReachableIter<'db, DB: IrMethods + AstMethods> {
+    db: &'db DB,
+    queue: VecDeque<DefKind>,
+}
+impl<'db, DB: IrMethods + AstMethods> Iterator for ReachableIter<'db, DB> {
+    type Item = DefKind;
+    fn next<'a>(&'a mut self) -> Option<Self::Item> {
+        let item = self.queue.pop_front()?;
+        struct ReachableVisitor<'a>(&'a mut VecDeque<DefKind>);
+        impl<'a, DB: IrMethods + AstMethods> Visitor<DB> for ReachableVisitor<'a> {
+            fn visit_item(&mut self, _db: &DB, item: &DefKind) {
+                debug_assert!(!self.0.contains(item));
+                self.0.push_back(item.clone());
+            }
+        }
+        ReachableVisitor(&mut self.queue).super_visit_item(self.db, &item);
+        Some(item)
+    }
+}
+
+trait Visitor<DB: IrMethods + AstMethods> {
+    //fn visit_def(&mut self, db: &DB, def: Def) {
+    //    self.super_visit_def(db, def);
+    //}
+
+    fn super_visit_def(&mut self, db: &DB, def: Def) {
+        self.visit_item(db, &def.lookup(db));
+    }
+
+    fn visit_item(&mut self, db: &DB, item: &DefKind) {
+        self.super_visit_item(db, item);
+    }
+
+    fn super_visit_item(&mut self, db: &DB, item: &DefKind) {
+        match item {
+            DefKind::CcDef(cc_item) => self.visit_cc_item(db, cc_item),
+        }
+    }
+
+    fn visit_cc_item(&mut self, db: &DB, item: &cc::ItemKind) {
+        self.super_visit_cc_item(db, item);
+    }
+
+    fn super_visit_cc_item(&mut self, db: &DB, item: &cc::ItemKind) {
+        match item {
+            cc::ItemKind::Struct(id) => self.visit_cc_struct(db, *id),
+        }
+    }
+
+    fn visit_cc_struct(&mut self, db: &DB, id: cc::StructId) {
+        self.super_visit_cc_struct(db, &id.lookup(db));
+    }
+
+    fn super_visit_cc_struct(&mut self, db: &DB, st: &cc::Struct) {
+        #[allow(unused)]
+        let cc::Struct {
+            name,
+            fields,
+            offsets,
+            methods,
+            size,
+            align,
+            span,
+        } = st;
+        for field in fields {
+            self.visit_cc_type_ref(db, field.ty.clone())
+        }
+    }
+
+    fn visit_cc_type_ref(&mut self, db: &DB, ty_ref: cc::TypeRef) {
+        self.super_visit_cc_type_ref(db, ty_ref);
+    }
+
+    fn super_visit_cc_type_ref(&mut self, db: &DB, ty_ref: cc::TypeRef) {
+        self.visit_cc_type(db, &ty_ref.get(db).skip_errs());
+    }
+
+    fn visit_cc_type(&mut self, db: &DB, ty: &cc::Ty) {
+        self.super_visit_cc_type(db, ty);
+    }
+
+    fn super_visit_cc_type(&mut self, db: &DB, ty: &cc::Ty) {
+        use cc::Ty::*;
+        match ty {
+            Error => (),
+            Float | Double => (),
+            Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS | CharU
+            | SChar | UChar | Size | SSize | PtrDiff => (),
+            Bool => (),
+            Struct(id) => self.visit_item(db, &DefKind::CcDef(cc::ItemKind::Struct(*id))),
+        }
+    }
+}
 
 /// Types and utilities used from both the Rust and C++ IRs.
 mod common {
@@ -142,10 +310,47 @@ mod common {
 /// C++ intermediate representation.
 pub mod cc {
     use super::*;
-    use crate::libclang::AstMethods;
+    use crate::libclang::{self, AstMethods};
     use std::sync::Arc;
 
     pub use common::{Align, Ident, Offset, Path, Size};
+
+    #[salsa::query_group(RsIrStorage)]
+    #[salsa::requires(AstMethods)]
+    #[salsa::requires(IrMethods)]
+    pub trait RsIr {
+        fn rs_bindings(&self) -> Arc<Outcome<rs::Module>>;
+
+        fn rs_struct_from_cc(&self, id: cc::StructId) -> Outcome<rs::StructId>;
+
+        #[salsa::interned]
+        fn intern_struct(&self, st: rs::Struct) -> rs::StructId;
+    }
+
+    fn rs_bindings(db: &(impl AstMethods + RsIr + IrMethods)) -> Arc<Outcome<rs::Module>> {
+        Arc::new(
+            db.cc_ir_from_src()
+                .to_ref()
+                .then(|ir| ir.to_rs_bindings(db)),
+        )
+    }
+
+    fn rs_struct_from_cc(db: &(impl AstMethods + RsIr), id: cc::StructId) -> Outcome<rs::StructId> {
+        id.lookup(db)
+            .to_rust(db, id)
+            .then(|rs_st| ok(db.intern_struct(rs_st)))
+    }
+
+    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    pub struct TypeRef(libclang::TypeId);
+    impl TypeRef {
+        pub(crate) fn new(id: libclang::TypeId) -> Self {
+            TypeRef(id)
+        }
+        pub fn get(&self, db: &impl AstMethods) -> Outcome<Ty> {
+            db.type_of(self.0)
+        }
+    }
 
     intern_key!(TyId);
     impl TyId {
@@ -168,27 +373,6 @@ pub mod cc {
         }
     }
 
-    #[salsa::query_group(RsIrStorage)]
-    #[salsa::requires(AstMethods)]
-    pub trait RsIr {
-        fn rs_ir(&self) -> Arc<Outcome<rs::Module>>;
-
-        fn rs_struct_from_cc(&self, id: cc::StructId) -> Outcome<rs::StructId>;
-
-        #[salsa::interned]
-        fn intern_struct(&self, st: rs::Struct) -> rs::StructId;
-    }
-
-    fn rs_ir(db: &(impl AstMethods + RsIr)) -> Arc<Outcome<rs::Module>> {
-        Arc::new(db.cc_ir_from_src().to_ref().then(|ir| ir.to_rust(db)))
-    }
-
-    fn rs_struct_from_cc(db: &(impl AstMethods + RsIr), id: cc::StructId) -> Outcome<rs::StructId> {
-        id.lookup(db)
-            .to_rust(db, id)
-            .then(|rs_st| ok(db.intern_struct(rs_st)))
-    }
-
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
     pub enum ItemKind {
         Struct(StructId),
@@ -196,53 +380,6 @@ pub mod cc {
     impl From<StructId> for ItemKind {
         fn from(st: StructId) -> Self {
             ItemKind::Struct(st)
-        }
-    }
-
-    /// A set of C++ items being exposed to Rust. This is the top level of the IR
-    /// representation.
-    #[derive(Default, Debug, Eq, PartialEq)]
-    pub struct Module {
-        pub items: Vec<ItemKind>,
-        pub exports: HashSet<ItemKind>,
-    }
-    impl Module {
-        pub fn structs<'a>(&'a self) -> impl Iterator<Item = StructId> + 'a {
-            self.items.iter().flat_map(|item| match item {
-                ItemKind::Struct(id) => Some(*id),
-            })
-        }
-
-        pub fn add_struct(&mut self, st: StructId) {
-            self.items.push(ItemKind::Struct(st));
-        }
-    }
-
-    impl Module {
-        pub fn to_rust(&self, db: &(impl RsIr + AstMethods)) -> Outcome<rs::Module> {
-            self.items
-                .iter()
-                .map(|cc_id| {
-                    let item = match cc_id {
-                        ItemKind::Struct(st) => db.rs_struct_from_cc(*st),
-                    };
-                    item.map(|i| (cc_id, i))
-                })
-                .collect::<Outcome<Vec<_>>>()
-                .then(|structs| {
-                    let mut exports = HashSet::new();
-                    let items = structs
-                        .iter()
-                        .map(|(cc_id, st)| {
-                            let item = rs::ItemKind::Struct(*st);
-                            if self.exports.contains(cc_id) {
-                                exports.insert(item);
-                            }
-                            item
-                        })
-                        .collect();
-                    ok(rs::Module { items, exports })
-                })
         }
     }
 
@@ -373,7 +510,7 @@ pub mod cc {
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Field {
         pub name: Ident,
-        pub ty: Ty, // TODO intern
+        pub ty: TypeRef,
         pub span: Span,
     }
 
@@ -397,19 +534,21 @@ pub mod cc {
                 .fields
                 .iter()
                 .map(|f| {
-                    f.ty.to_rust(db).map(|ty| rs::Field {
-                        name: f.name.clone(),
-                        ty,
-                        span: f.span.clone(),
-                        // Long term we probably don't want to condition
-                        // visibility on the visibility of the type (instead
-                        // controlling visibility with inner modules and `pub
-                        // use`), but this works well for now.
-                        vis: match f.ty.is_visible(db) {
-                            true => rs::Visibility::Public,
-                            false => rs::Visibility::Private,
-                        },
-                    })
+                    f.ty.get(db)
+                        .then(|ty| ty.to_rust(db).map(|rs_ty| (ty, rs_ty)))
+                        .map(|(cc_ty, rs_ty)| rs::Field {
+                            name: f.name.clone(),
+                            ty: rs_ty,
+                            span: f.span.clone(),
+                            // Long term we probably don't want to condition
+                            // visibility on the visibility of the type (instead
+                            // controlling visibility with inner modules and `pub
+                            // use`), but this works well for now.
+                            vis: match cc_ty.is_visible(db) {
+                                true => rs::Visibility::Public,
+                                false => rs::Visibility::Private,
+                            },
+                        })
                 })
                 .collect::<Outcome<Vec<_>>>();
             let mdl = db.cc_ir_from_src();

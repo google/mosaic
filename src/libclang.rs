@@ -1,6 +1,7 @@
 use crate::{
     diagnostics::{err, ok, Diagnostic, Diagnostics, FileId, Outcome, Span},
     ir::cc::{self, *},
+    ir::{DefKind, Module},
     util::DisplayName,
     Session,
 };
@@ -10,7 +11,7 @@ use clang::{
 };
 use core::hash::Hasher;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::hash::Hash;
 use std::path::PathBuf;
@@ -53,6 +54,7 @@ impl<T: Hash + Eq + Clone, Id: salsa::InternKey + Copy> Interner<T, Id> {
 
 intern_key!(EntityId);
 intern_key!(ExportId);
+intern_key!(TypeId);
 
 #[allow(dead_code)]
 struct AstContextInner<'tu> {
@@ -63,6 +65,10 @@ struct AstContextInner<'tu> {
     files: Interner<source::File<'tu>, FileId>,
     entities: Interner<Entity<'tu>, EntityId>,
     exports: Interner<(Path, Export<'tu>), ExportId>,
+
+    //def_to_entity: HashMap<Def, Entity<'tu>>,
+    //entity_to_def: HashMap<Entity<'tu>, Def>,
+    types: Interner<HashType<'tu>, TypeId>,
 }
 
 impl<'tu> AstContextInner<'tu> {
@@ -74,7 +80,15 @@ impl<'tu> AstContextInner<'tu> {
             files: Interner::new(),
             entities: Interner::new(),
             exports: Interner::new(),
+
+            //def_to_entity: HashMap::default(),
+            //entity_to_def: HashMap::default(),
+            types: Interner::new(),
         }
+    }
+
+    fn mk_type_ref(&self, ty: clang::Type<'tu>) -> cc::TypeRef {
+        cc::TypeRef::new(self.types.intern(HashType(ty)))
     }
 }
 
@@ -105,10 +119,16 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
     parser
 }
 
-fn lower_ast(db: &impl db::AstMethods) -> Outcome<cc::Module> {
-    with_ast(db, |tu, ast| -> Outcome<cc::Module> {
+fn lower_ast(db: &impl db::AstMethods) -> Outcome<Module> {
+    with_ast(db, |tu, ast| -> Outcome<Module> {
         let exports = get_exports(ast, tu);
         exports.then(|exports| LowerCtx::new(db, ast).lower(&exports))
+    })
+}
+
+fn lower_ty(db: &impl db::AstMethods, ty: TypeId) -> Outcome<cc::Ty> {
+    with_ast(db, |_tu, ast| -> Outcome<cc::Ty> {
+        ast.types.lookup(ty).0.lower(&LowerCtx::new(db, ast))
     })
 }
 
@@ -201,22 +221,43 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower(&mut self, exports: &Vec<(Path, Export<'tu>)>) -> Outcome<cc::Module> {
+    fn lower(&self, exports: &Vec<(Path, Export<'tu>)>) -> Outcome<Module> {
         //let mut visitor = AstVisitor::new(&self);
         let mut outcome = ok(());
-        let mut mdl = cc::Module::default();
+        let mut mdl = Module::default();
+        let mut export_set = HashSet::new();
         for (name, export) in exports {
-            outcome = outcome.then(|()| self.lower_export(name, export, &mut mdl));
+            outcome = outcome.then(|()| self.lower_export(name, export, &mut mdl, &mut export_set));
         }
         outcome.then(|()| ok(mdl))
     }
 
-    fn lower_export(&self, name: &Path, export: &Export<'tu>, mdl: &mut Module) -> Outcome<()> {
+    fn lower_export(
+        &self,
+        name: &Path,
+        export: &Export<'tu>,
+        mdl: &mut Module,
+        export_set: &mut HashSet<DefKind>,
+    ) -> Outcome<()> {
         match export {
-            Export::Decl(decl_ref) => self.lower_decl(name, *decl_ref, mdl).map(|item| {
+            Export::Decl(decl_ref) => self.lower_decl(name, *decl_ref).then(|item| {
                 if let Some(kind) = item {
-                    mdl.exports.insert(kind);
+                    let def = DefKind::CcDef(kind);
+                    if !export_set.insert(def.clone()) {
+                        // TODO we should represent this as unique aliases to
+                        // the same item, so we can't have "duplicate" exports.
+                        return err(
+                            (),
+                            Diagnostic::error(
+                                "multiple exports of the same item are not supported",
+                                self.span(*decl_ref)
+                                    .label("this item has already been exported"),
+                            ),
+                        );
+                    }
+                    mdl.exports.push(def);
                 }
+                ok(())
             }),
             Export::Type(ty) => {
                 println!("{} = {:?}", name, ty);
@@ -251,12 +292,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower_decl(
-        &self,
-        name: &Path,
-        decl_ref: Entity<'tu>,
-        mdl: &mut cc::Module,
-    ) -> Outcome<Option<cc::ItemKind>> {
+    fn lower_decl(&self, name: &Path, decl_ref: Entity<'tu>) -> Outcome<Option<cc::ItemKind>> {
         let overloads = decl_ref.get_overloaded_declarations().unwrap();
         assert_eq!(overloads.len(), 1);
         let ent = overloads[0];
@@ -268,7 +304,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
 
         match ent.get_kind() {
             EntityKind::StructDecl => self
-                .lower_struct(name, ent, mdl)
+                .lower_struct(name, ent)
                 .map(|st| st.map(cc::ItemKind::Struct)),
             //other => eprintln!("{}: Unsupported type {:?}", name, other),
             other => err(
@@ -281,12 +317,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower_struct(
-        &self,
-        name: &Path,
-        ent: Entity<'tu>,
-        mdl: &mut cc::Module,
-    ) -> Outcome<Option<cc::StructId>> {
+    fn lower_struct(&self, name: &Path, ent: Entity<'tu>) -> Outcome<Option<cc::StructId>> {
         assert_eq!(ent.get_kind(), EntityKind::StructDecl);
 
         let ty = ent.get_type().unwrap();
@@ -325,9 +356,9 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         ent.visit_children(|child, _| {
             keep_going = match child.get_kind() {
                 EntityKind::FieldDecl => {
-                    self.lower_field(child, mdl, &mut fields, &mut offsets, &mut errs)
+                    self.lower_field(child, &mut fields, &mut offsets, &mut errs)
                 }
-                EntityKind::Method => self.lower_method(child, mdl, &mut methods, &mut errs),
+                EntityKind::Method => self.lower_method(child, &mut methods, &mut errs),
                 EntityKind::PackedAttr => {
                     errs.add(Diagnostic::error(
                         "packed structs not supported",
@@ -370,7 +401,6 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                 align: cc::Align::new(align),
                 span: self.span(ent),
             });
-            mdl.add_struct(st);
             Some(st)
         } else {
             None
@@ -381,7 +411,6 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
     fn lower_field(
         &self,
         field: Entity<'tu>,
-        mdl: &mut cc::Module,
         fields: &mut Vec<Field>,
         offsets: &mut Vec<u16>,
         errs: &mut Diagnostics,
@@ -396,8 +425,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             // Don't "peer through" anonymous struct/union fields, for now.
             None => return true,
         };
-        let (ty, field_ty_errs) = field.get_type().unwrap().lower(self, mdl).split();
-        errs.append(field_ty_errs);
+        let ty = self.ast.mk_type_ref(field.get_type().unwrap());
         fields.push(Field {
             name: Ident::from(field_name),
             ty,
@@ -425,7 +453,6 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
     fn lower_method(
         &self,
         method: Entity<'tu>,
-        mdl: &mut cc::Module,
         methods: &mut Vec<cc::FunctionId>,
         errs: &mut Diagnostics,
     ) -> bool {
@@ -482,20 +509,12 @@ fn maybe_span_from_range<'tu>(
 
 trait Lower<'ctx, 'tu> {
     type Output;
-    fn lower<DB: db::AstMethods>(
-        &self,
-        ctx: &LowerCtx<'ctx, 'tu, DB>,
-        mdl: &mut cc::Module,
-    ) -> Outcome<Ty>;
+    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty>;
 }
 
 impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
     type Output = Ty;
-    fn lower<DB: db::AstMethods>(
-        &self,
-        ctx: &LowerCtx<'ctx, 'tu, DB>,
-        mdl: &mut cc::Module,
-    ) -> Outcome<Ty> {
+    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty> {
         use TypeKind::*;
         ok(match self.get_kind() {
             Int => Ty::Int,
@@ -509,7 +528,7 @@ impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
             Record => {
                 let decl = self.get_declaration().unwrap();
                 return ctx
-                    .lower_struct(&Path::from(self.get_display_name()), decl, mdl)
+                    .lower_struct(&Path::from(self.get_display_name()), decl)
                     .map(|st| st.map_or(Ty::Error, |st| Ty::Struct(st)));
             }
             _ => panic!("unsupported type {:?}", self),

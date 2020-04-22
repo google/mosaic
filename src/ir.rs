@@ -161,7 +161,7 @@ trait Visitor<DB: IrMethods + AstMethods> {
     }
 
     fn super_visit_cc_type_ref(&mut self, db: &DB, ty_ref: cc::TypeRef) {
-        self.visit_cc_type(db, &ty_ref.get(db).skip_errs());
+        self.visit_cc_type(db, &ty_ref.as_cc(db).skip_errs());
     }
 
     fn visit_cc_type(&mut self, db: &DB, ty: &cc::Ty) {
@@ -184,6 +184,7 @@ trait Visitor<DB: IrMethods + AstMethods> {
 /// Types and utilities used from both the Rust and C++ IRs.
 mod common {
     use super::*;
+    use crate::libclang;
 
     /// A C++ unqualified identifier.
     ///
@@ -305,15 +306,29 @@ mod common {
             Size(size)
         }
     }
+
+    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    pub struct TypeRef(libclang::TypeId);
+    impl TypeRef {
+        pub(crate) fn new(id: libclang::TypeId) -> Self {
+            TypeRef(id)
+        }
+        pub fn as_cc(&self, db: &impl AstMethods) -> Outcome<cc::Ty> {
+            db.type_of(self.0)
+        }
+        pub fn as_rs(&self, db: &impl cc::RsIr) -> Outcome<rs::Ty> {
+            db.rs_type_of(self.clone())
+        }
+    }
 }
 
 /// C++ intermediate representation.
 pub mod cc {
     use super::*;
-    use crate::libclang::{self, AstMethods};
+    use crate::libclang::AstMethods;
     use std::sync::Arc;
 
-    pub use common::{Align, Ident, Offset, Path, Size};
+    pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
 
     #[salsa::query_group(RsIrStorage)]
     #[salsa::requires(AstMethods)]
@@ -323,8 +338,15 @@ pub mod cc {
 
         fn rs_struct_from_cc(&self, id: cc::StructId) -> Outcome<rs::StructId>;
 
+        #[salsa::dependencies]
+        fn rs_type_of(&self, ty: TypeRef) -> Outcome<rs::Ty>;
+
         #[salsa::interned]
         fn intern_struct(&self, st: rs::Struct) -> rs::StructId;
+    }
+
+    fn rs_type_of(db: &(impl AstMethods + RsIr), ty: TypeRef) -> Outcome<rs::Ty> {
+        ty.as_cc(db).then(|ty| ty.to_rust(db))
     }
 
     fn rs_bindings(db: &(impl AstMethods + RsIr + IrMethods)) -> Arc<Outcome<rs::Module>> {
@@ -339,17 +361,6 @@ pub mod cc {
         id.lookup(db)
             .to_rust(db, id)
             .then(|rs_st| ok(db.intern_struct(rs_st)))
-    }
-
-    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
-    pub struct TypeRef(libclang::TypeId);
-    impl TypeRef {
-        pub(crate) fn new(id: libclang::TypeId) -> Self {
-            TypeRef(id)
-        }
-        pub fn get(&self, db: &impl AstMethods) -> Outcome<Ty> {
-            db.type_of(self.0)
-        }
     }
 
     intern_key!(StructId);
@@ -527,11 +538,13 @@ pub mod cc {
                 .fields
                 .iter()
                 .map(|f| {
-                    f.ty.get(db)
-                        .then(|ty| ty.to_rust(db).map(|rs_ty| (ty, rs_ty)))
-                        .map(|(cc_ty, rs_ty)| rs::Field {
+                    f.ty.as_cc(db)
+                        // Collect errors from lowering each field's type to Rust here.
+                        // TODO find a more robust/explicit way.
+                        .then(|cc_ty| cc_ty.to_rust(db).map(|_| cc_ty))
+                        .map(|cc_ty| rs::Field {
                             name: f.name.clone(),
-                            ty: rs_ty,
+                            ty: f.ty.clone(),
                             span: f.span.clone(),
                             // Long term we probably don't want to condition
                             // visibility on the visibility of the type (instead
@@ -568,8 +581,9 @@ pub mod cc {
             let mut align = self.align;
             assert_eq!(self.fields.len(), self.offsets.len());
             for (idx, field) in fields.iter().enumerate() {
-                offset = common::align_to(offset, field.ty.align(db));
-                align = std::cmp::max(align, field.ty.align(db));
+                let field_ty = field.ty(db);
+                offset = common::align_to(offset, field_ty.align(db));
+                align = std::cmp::max(align, field_ty.align(db));
 
                 // Here's where we could add padding, if we wanted to.
                 if offset != self.offsets[idx] {
@@ -588,7 +602,7 @@ pub mod cc {
                     );
                 }
 
-                offset += field.ty.size(db).0;
+                offset += field_ty.size(db).0;
             }
 
             let size = common::align_to(offset, align);
@@ -623,7 +637,7 @@ pub mod rs {
     use super::*;
     use cc::RsIr;
 
-    pub use common::{Align, Ident, Offset, Path, Size};
+    pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
 
     intern_key!(StructId);
     impl StructId {
@@ -710,9 +724,16 @@ pub mod rs {
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Field {
         pub name: Ident,
-        pub ty: Ty,
+        pub ty: TypeRef,
         pub span: Span,
         pub vis: Visibility,
+    }
+    impl Field {
+        pub fn ty(&self, db: &impl RsIr) -> Ty {
+            // skip_errs okay since we collect errors in `cc::Struct::to_rust`
+            // when this Field is created.
+            self.ty.as_rs(db).skip_errs()
+        }
     }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]

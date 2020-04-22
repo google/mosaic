@@ -39,7 +39,7 @@ impl Codegen for rs::Struct {
             write!(f, "    ")?;
             field.vis.gen(db, f)?;
             write!(f, "{}: ", field.name)?;
-            field.ty.gen(db, f)?;
+            field.ty(db).gen(db, f)?;
             writeln!(f, ",")?;
         }
         writeln!(f, "}}")?;

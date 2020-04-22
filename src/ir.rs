@@ -352,13 +352,6 @@ pub mod cc {
         }
     }
 
-    intern_key!(TyId);
-    impl TyId {
-        pub fn lookup(&self, db: &impl AstMethods) -> Ty {
-            db.lookup_intern_cc_ty(*self)
-        }
-    }
-
     intern_key!(StructId);
     impl StructId {
         pub fn lookup(&self, db: &impl AstMethods) -> Struct {
@@ -368,7 +361,7 @@ pub mod cc {
 
     intern_key!(FunctionId);
     impl FunctionId {
-        pub fn lookup(&self, db: &impl AstMethods) -> Arc<Function> {
+        pub fn lookup(&self, db: &impl AstMethods) -> Arc<Outcome<Function>> {
             db.lookup_intern_cc_fn(*self)
         }
     }
@@ -501,7 +494,7 @@ pub mod cc {
         pub name: Path,
         pub fields: Vec<Field>,
         pub offsets: Vec<Offset>,
-        pub methods: Vec<FunctionId>,
+        pub methods: Vec<Function>,
         pub size: Size,
         pub align: Align,
         pub span: Span,
@@ -517,9 +510,9 @@ pub mod cc {
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Function {
         pub name: Ident,
-        pub param_tys: Vec<TyId>,
-        pub param_names: Vec<Ident>,
-        pub return_ty: TyId,
+        pub param_tys: Vec<TypeRef>,
+        pub param_names: Vec<Option<Ident>>,
+        pub return_ty: TypeRef,
         /// Whether this function is a non-static method.
         ///
         /// Methods have an implicit `this` type as their first parameter.

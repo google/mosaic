@@ -18,13 +18,10 @@ pub trait AstMethods {
     fn type_of(&self, id: TypeId) -> Outcome<ir::cc::Ty>;
 
     #[salsa::interned]
-    fn intern_cc_ty(&self, st: ir::cc::Ty) -> ir::cc::TyId;
-
-    #[salsa::interned]
     fn intern_cc_struct(&self, st: ir::cc::Struct) -> ir::cc::StructId;
 
     #[salsa::interned]
-    fn intern_cc_fn(&self, func: Arc<ir::cc::Function>) -> ir::cc::FunctionId;
+    fn intern_cc_fn(&self, func: Arc<Outcome<ir::cc::Function>>) -> ir::cc::FunctionId;
 }
 
 fn ast_context(db: &(impl AstMethods + salsa::Database)) {

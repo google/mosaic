@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn method() {
         let mut sess = Session::new();
-        cpp_lower!(sess, {
+        cpp_to_rs!(sess, {
             struct Foo {
                 int a, b;
                 int sum(int c, int) const;
@@ -140,8 +140,13 @@ mod tests {
             namespace rust_export {
                 using ::Foo;
             }
-        } => [
-        ]);
+        } => r#"
+        #[repr(C, align(4))]
+        pub struct Foo {
+            pub a: i32,
+            pub b: i32,
+        }
+        "#);
     }
 
     // TODO handle these.

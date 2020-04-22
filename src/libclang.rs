@@ -374,7 +374,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                     true
                 }
                 _ => {
-                    errs.add(Diagnostic::error(
+                    errs.add(Diagnostic::bug(
                         "unhandled child of struct",
                         self.span(child)
                             .label("this kind of item is not handled yet"),
@@ -423,6 +423,8 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         let field_name = match field.get_name() {
             Some(name) => name,
             // Don't "peer through" anonymous struct/union fields, for now.
+            // This will report an error when checking layouts.
+            // TODO report an error here
             None => return true,
         };
         let ty = self.ast.mk_type_ref(field.get_type().unwrap());
@@ -449,32 +451,40 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         true
     }
 
-    #[allow(unused)]
     fn lower_method(
         &self,
         method: Entity<'tu>,
-        methods: &mut Vec<cc::FunctionId>,
+        methods: &mut Vec<cc::Function>,
         errs: &mut Diagnostics,
     ) -> bool {
-        eprintln!("method: {:?}", method);
         let ty = method.get_type().unwrap();
-        eprintln!("type: {:?}", ty);
-        eprintln!("const: {:?}", method.is_const_method());
-        eprintln!("static: {:?}", method.is_static_method());
-        eprintln!(
-            "virtual: {:?}, pure virtual: {:?}",
-            method.is_virtual_method(),
-            method.is_pure_virtual_method()
-        );
+        eprintln!("calling convention: {:?}", ty.get_calling_convention());
+        let mut param_tys = vec![];
+        let mut param_names = vec![];
         method.visit_children(|child, _| {
-            eprintln!("- {:?}: {:?}", child, child.get_type());
+            match child.get_kind() {
+                EntityKind::ParmDecl => {
+                    param_names.push(child.get_name().map(Ident::from));
+                    param_tys.push(self.ast.mk_type_ref(child.get_type().unwrap()));
+                }
+                _ => {
+                    errs.add(Diagnostic::bug(
+                        "unhandled child of method",
+                        self.span(child)
+                            .label("this kind of item is not yet handled"),
+                    ));
+                }
+            }
             EntityVisitResult::Continue
         });
-        for arg_ty in ty.get_argument_types().unwrap() {
-            eprintln!("* {:?}", arg_ty);
-        }
-        eprintln!("returns: {:?}", ty.get_result_type().unwrap());
-        eprintln!("calling convention: {:?}", ty.get_calling_convention());
+        methods.push(cc::Function {
+            name: method.get_name().unwrap().into(),
+            param_tys,
+            param_names,
+            return_ty: self.ast.mk_type_ref(ty.get_result_type().unwrap()),
+            is_method: !method.is_static_method(),
+            is_const: method.is_const_method(),
+        });
         true
     }
 

@@ -559,11 +559,23 @@ pub mod cc {
                 .collect::<Outcome<Vec<_>>>();
             let mdl = db.cc_ir_from_src();
             let mdl = mdl.to_ref().skip_errs();
-            fields.then(|fields| {
-                self.check_offsets(db, &fields).map(|()| rs::Struct {
+            ok(())
+                .then(|()| {
+                    // Check method types.
+                    self.methods
+                        .iter()
+                        .flat_map(|meth| meth.param_tys.iter())
+                        .map(|ty| ty.as_rs(db).map(|_| ()))
+                        .collect::<Outcome<Vec<()>>>()
+                        .map(|_| ())
+                })
+                .then(|()| fields)
+                .then(|fields| self.check_offsets(db, &fields).map(|_| fields))
+                .map(|fields| rs::Struct {
                     name: self.name.clone(),
                     fields,
                     offsets: self.offsets.clone(),
+                    methods: self.methods.iter().cloned().map(rs::Method).collect(),
                     vis: match mdl.exports.contains(&id.into()) {
                         true => rs::Visibility::Public,
                         false => rs::Visibility::Private,
@@ -573,7 +585,6 @@ pub mod cc {
                     align: self.align,
                     span: self.span.clone(),
                 })
-            })
         }
 
         fn check_offsets(&self, db: &impl RsIr, fields: &Vec<rs::Field>) -> Outcome<()> {
@@ -748,12 +759,30 @@ pub mod rs {
         pub name: Path,
         pub fields: Vec<Field>,
         pub offsets: Vec<Offset>,
+        pub methods: Vec<Method>,
         pub vis: Visibility,
         pub repr: Repr,
         pub size: Size,
         pub align: Align,
         pub span: Span,
     }
+
+    #[derive(Debug, Clone, Eq, PartialEq, Hash)]
+    pub struct Method(pub(super) Function);
+    impl Method {
+        pub fn func(&self) -> &Function {
+            &self.0
+        }
+        pub fn param_tys<'a>(&'a self, db: &'a impl RsIr) -> impl Iterator<Item = Ty> + 'a {
+            // skip_errs is okay because we check method types in Struct::to_rust above.
+            self.0
+                .param_tys
+                .iter()
+                .map(move |ty_ref| ty_ref.as_rs(db).skip_errs())
+        }
+    }
+
+    pub use cc::{Function, FunctionId};
 }
 
 #[cfg(test)]

@@ -18,6 +18,10 @@ owning_ref = "0.4.0"
 rental = "0.5.4"
 proc-macro2 = "1.0"
 quote = "1.0"
+unindent = "0.1"
+itertools = "0.9"
+fstrings = "0.2"
+indoc = { version = "0.3", features = ["unstable"] }
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"

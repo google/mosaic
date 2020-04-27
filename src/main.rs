@@ -1,3 +1,5 @@
+#![feature(proc_macro_hygiene)]
+
 #[cfg(test)]
 #[macro_use]
 mod test_util;

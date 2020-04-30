@@ -2,7 +2,7 @@
 
 use crate::ir::cc::RsIr;
 use crate::ir::rs;
-use fstrings::*;
+use gen_macro::gen;
 use itertools::Itertools;
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream};
 use quote::{ToTokens, TokenStreamExt};
@@ -129,85 +129,53 @@ fn gen_method(
     // TODO handle visibility (don't generate bindings for private methods)
     // TODO handle constness
     let func = meth.func();
-    let func_name = &func.name;
     debug_assert_eq!(func.param_tys.len(), func.param_names.len());
 
     let arg_names = arg_names(meth);
-    let gen_fn_sig = |f: &mut CodeWriter, self_arg| -> io::Result<()> {
-        write!(f, "    fn {}({self}", meth.func().name, self = self_arg)?;
-        write!(f, ", ")?;
-        for (name, ty) in arg_names.iter().zip(meth.param_tys(db)) {
-            write!(f, "{}: ", name)?;
-            ty.gen(db, f)?;
-            write!(f, ", ")?;
-        }
-        write!(f, ")")?;
-        Ok(())
-    };
-    //let args_sig = {
-    //    let mut ts = TokenStream::new();
-    //    ts.append_separated(
-    //        arg_names
-    //            .iter()
-    //            .zip(meth.param_tys(db).with_db(db))
-    //            .map(|(name, ty)| quote!(#name: #ty)),
-    //        Punct::new(',', Spacing::Alone),
-    //    );
-    //    ts
-    //};
-
     let args_sig = arg_names
         .iter()
         .zip(meth.param_tys(db).with_db(db))
         .map(|(name, ty)| format!("{}: {}", name, ty))
         .join(", ");
 
+    let func_name = &func.name;
+    let struct_name = &st.name;
     let trait_name = format!("{}_{}_Ext", st.name, func.name);
 
     // Create an extension trait for our method.
-    write_f!(
+    gen!(
         f,
-        r#"
-        trait {trait_name} {{
-            fn {func_name}(self, {args_sig});
-        }}
-    "#
+        "
+        trait $trait_name {
+            fn $func_name(self, $args_sig);
+        }
+    "
     )?;
-    //writeln!(f, "trait {} {{", trait_name)?;
-    //gen_fn_sig(f, "self")?;
-    //writeln!(f, ";")?;
-    //writeln!(f, "}}")?;
-
-    //let ext_trait = quote! {
-    //    trait #trait_name {
-    //        fn #func_name(self, #args_sig);
-    //    }
-    //};
-    //write!(f, "{}", ext_trait)?;
 
     // impl the extension trait for NonNull<Struct>.
-    writeln!(
+    gen!(
         f,
-        "impl {} for ::core::ptr::NonNull<{}> {{",
-        trait_name, st.name
+        "
+        impl $trait_name for ::core::ptr::NonNull<$struct_name> {
+            fn $func_name(self, $args_sig) {
+                todo!()
+            }
+        }
+    "
     )?;
-    gen_fn_sig(f, "self")?;
-    writeln!(f, " {{")?;
-    writeln!(f, "        todo!()")?;
-    writeln!(f, "    }}")?;
-    writeln!(f, "}}")?;
 
     // Create a convenience wrapper for &mut self.
-    writeln!(f, "impl {} {{", st.name)?;
-    gen_fn_sig(f, "&mut self")?;
-    writeln!(f, " {{")?;
-    write!(f, "        ::core::ptr::NonNull::from(self).{}(", func.name)?;
-    for arg in &arg_names {
-        write!(f, "{}, ", arg)?;
-    }
-    writeln!(f, ")")?;
-    writeln!(f, "    }}")?;
-    writeln!(f, "}}")?;
+    let arg_names = arg_names.iter().join(", ");
+    gen!(
+        f,
+        "
+        impl $struct_name {
+            fn $func_name(&mut self, $args_sig) {
+                ::core::ptr::NonNull::from(self).$func_name($arg_names)
+            }
+        }
+    "
+    )?;
 
     Ok(())
 }
@@ -412,16 +380,16 @@ mod tests {
             pub b: i32,
         }
         trait Foo_sum_Ext {
-            fn sum(self, c: i32, __1: i32, );
+            fn sum(self, c: i32, __1: i32);
         }
         impl Foo_sum_Ext for ::core::ptr::NonNull<Foo> {
-            fn sum(self, c: i32, __1: i32, ) {
+            fn sum(self, c: i32, __1: i32) {
                 todo!()
             }
         }
         impl Foo {
-            fn sum(&mut self, c: i32, __1: i32, ) {
-                ::core::ptr::NonNull::from(self).sum(c, __1, )
+            fn sum(&mut self, c: i32, __1: i32) {
+                ::core::ptr::NonNull::from(self).sum(c, __1)
             }
         }
         "#);

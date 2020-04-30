@@ -1,4 +1,6 @@
 /target
+gen_macro/target
+gen_macro/impl/target
 **/*.rs.bk
 TAGS
 /.vscode

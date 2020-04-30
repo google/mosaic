@@ -1,0 +1,15 @@
+[package]
+name = "gen_macro_impl"
+version = "0.1.0"
+authors = ["Tyler Mandry <tmandry@gmail.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+proc-macro-hack = "0.5"
+syn = "1.0"
+quote = "1.0"
+unindent = "0.1"

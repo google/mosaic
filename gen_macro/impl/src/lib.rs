@@ -13,12 +13,12 @@ use syn::{
 };
 use unindent::unindent;
 
-struct GenMacroInput {
+struct WriteGenMacroInput {
     file: Expr,
     fmt_str: LitStr,
 }
 
-impl Parse for GenMacroInput {
+impl Parse for WriteGenMacroInput {
     fn parse(input: ParseStream) -> Result<Self> {
         let arg_list: Punctuated<Expr, Token![,]> = input.parse_terminated(Expr::parse)?;
         let mut args = arg_list.iter();
@@ -34,19 +34,19 @@ impl Parse for GenMacroInput {
             Some(tok) => return Err(Error::new_spanned(tok, "Unexpected token")),
             None => (),
         }
-        Ok(GenMacroInput { file, fmt_str })
+        Ok(WriteGenMacroInput { file, fmt_str })
     }
 }
 
 #[proc_macro_hack]
-pub fn gen(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let expr = parse_macro_input!(input as GenMacroInput);
-    gen_impl(expr)
+pub fn write_gen(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let expr = parse_macro_input!(input as WriteGenMacroInput);
+    write_gen_impl(expr)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
 
-fn gen_impl(input: GenMacroInput) -> Result<TokenStream> {
+fn write_gen_impl(input: WriteGenMacroInput) -> Result<TokenStream> {
     let (format_str, vars) = parse_gen_format_str(input.fmt_str)?;
 
     let extra_format_args = {

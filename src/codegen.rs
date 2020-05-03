@@ -1,10 +1,10 @@
 //! Generates Rust code from IR.
 
-#![cfg_attr(rustfmt, rustfmt::skip::macros(gen))]
+#![cfg_attr(rustfmt, rustfmt::skip::macros(write_gen))]
 
 use crate::ir::cc::RsIr;
 use crate::ir::rs;
-use gen_macro::gen;
+use gen_macro::write_gen;
 use itertools::Itertools;
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream};
 use quote::{ToTokens, TokenStreamExt};
@@ -122,7 +122,7 @@ impl Codegen for rs::Struct {
     }
 }
 
-#[rustfmt::skip::macros(gen)]
+#[rustfmt::skip::macros(write_gen)]
 fn gen_method(
     db: &impl RsIr,
     f: &mut CodeWriter,
@@ -146,14 +146,14 @@ fn gen_method(
     let trait_name = format!("{}_{}_Ext", st.name, func.name);
 
     // Create an extension trait for our method.
-    gen!(f, "
+    write_gen!(f, "
         trait $trait_name {
             fn $func_name(self, $args_sig);
         }
     ")?;
 
     // impl the extension trait for NonNull<Struct>.
-    gen!(f, "
+    write_gen!(f, "
         impl $trait_name for ::core::ptr::NonNull<$struct_name> {
             fn $func_name(self, $args_sig) {
                 todo!()
@@ -163,7 +163,7 @@ fn gen_method(
 
     // Create a convenience wrapper for &mut self.
     let arg_names = arg_names.iter().join(", ");
-    gen!(f, "
+    write_gen!(f, "
         impl $struct_name {
             fn $func_name(&mut self, $args_sig) {
                 ::core::ptr::NonNull::from(self).$func_name($arg_names)

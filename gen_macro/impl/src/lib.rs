@@ -7,20 +7,33 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input, Error, LitStr, Result,
+    parse_macro_input,
+    punctuated::Punctuated,
+    Error, Expr, LitStr, Result, Token,
 };
 use unindent::unindent;
 
 struct GenMacroInput {
-    file: Ident,
+    file: Expr,
     fmt_str: LitStr,
 }
 
 impl Parse for GenMacroInput {
     fn parse(input: ParseStream) -> Result<Self> {
-        let file = input.parse::<Ident>()?;
-        input.parse::<Punct>()?;
-        let fmt_str = input.parse::<LitStr>()?;
+        let arg_list: Punctuated<Expr, Token![,]> = input.parse_terminated(Expr::parse)?;
+        let mut args = arg_list.iter();
+        let file = args
+            .next()
+            .ok_or(Error::new_spanned(&arg_list, "Expected file expr"))?
+            .clone();
+        let fmt_str = args
+            .next()
+            .ok_or(Error::new_spanned(&arg_list, "Expected format string"))?;
+        let fmt_str: LitStr = syn::parse2(fmt_str.to_token_stream())?;
+        match args.next() {
+            Some(tok) => return Err(Error::new_spanned(tok, "Unexpected token")),
+            None => (),
+        }
         Ok(GenMacroInput { file, fmt_str })
     }
 }

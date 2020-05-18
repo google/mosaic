@@ -80,14 +80,14 @@ fn gen_method(
     let trait_name = snippet!(db, "${struct_name}_${func_name}_Ext");
 
     // Create an extension trait for our method.
-    write_gen!(f, db, "
+    write_gen!(db, f, "
         trait $trait_name {
             fn $func_name(self, $args_sig);
         }
     ")?;
 
     // impl the extension trait for NonNull<Struct>.
-    write_gen!(f, db, "
+    write_gen!(db, f, "
         impl $trait_name for ::core::ptr::NonNull<$struct_name> {
             fn $func_name(self, $args_sig) {
                 todo!()
@@ -97,7 +97,7 @@ fn gen_method(
 
     // Create a convenience wrapper for &mut self.
     let arg_names: Snippet = arg_names.iter().join(", ").into();
-    write_gen!(f, db, "
+    write_gen!(db, f, "
         impl $struct_name {
             fn $func_name(&mut self, $args_sig) {
                 ::core::ptr::NonNull::from(self).$func_name($arg_names)

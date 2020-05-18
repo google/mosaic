@@ -13,8 +13,8 @@ use syn::{
 };
 
 struct WriteGenMacroInput {
-    file: Expr,
     ctx: Expr,
+    file: Expr,
     fmt_str: LitStr,
 }
 
@@ -22,13 +22,13 @@ impl Parse for WriteGenMacroInput {
     fn parse(input: ParseStream) -> Result<Self> {
         let arg_list: Punctuated<Expr, Token![,]> = input.parse_terminated(Expr::parse)?;
         let mut args = arg_list.iter();
-        let file = args
-            .next()
-            .ok_or(Error::new_spanned(&arg_list, "Expected file expr"))?
-            .clone();
         let ctx = args
             .next()
             .ok_or(Error::new_spanned(&arg_list, "Expected context expr"))?
+            .clone();
+        let file = args
+            .next()
+            .ok_or(Error::new_spanned(&arg_list, "Expected file expr"))?
             .clone();
         let fmt_str = args
             .next()
@@ -38,7 +38,7 @@ impl Parse for WriteGenMacroInput {
             Some(tok) => return Err(Error::new_spanned(tok, "Unexpected token")),
             None => (),
         }
-        Ok(WriteGenMacroInput { file, ctx, fmt_str })
+        Ok(WriteGenMacroInput { ctx, file, fmt_str })
     }
 }
 

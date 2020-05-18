@@ -4,7 +4,7 @@
 
 use crate::ir::cc::RsIr;
 use crate::ir::rs;
-use gen_macro::{write_gen, Gen, Snippet};
+use gen_macro::{snippet, write_gen, Gen, Snippet};
 use itertools::Itertools;
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream};
 use quote::{ToTokens, TokenStreamExt};
@@ -144,7 +144,7 @@ fn gen_method(
 
     let func_name = &func.name;
     let struct_name = &st.name;
-    let trait_name: Snippet = format!("{}_{}_Ext", st.name, func.name).into();
+    let trait_name = snippet!(db, "${struct_name}_${func_name}_Ext")?;
 
     // Create an extension trait for our method.
     write_gen!(f, db, "

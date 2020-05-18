@@ -147,30 +147,10 @@ fn parse_gen_format_str(input: LitStr) -> Result<Vec<(Literal, Option<Ident>)>> 
                 continue;
             }
 
-            // Variable name.
-            let mut end_idx = None;
-            while let Some((idx, ch)) = chars.peek().cloned() {
-                if ch.is_ascii_alphanumeric() || ch == '_' {
-                    chars.next();
-                } else {
-                    end_idx = Some(idx);
-                    break;
-                }
-            }
-            let dollar_sign = idx;
-            let end_idx = end_idx.unwrap_or(value.len());
-            let var_name = &value[(dollar_sign + 1)..end_idx];
-            if !syn::parse_str::<Ident>(var_name).is_ok() {
-                return Err(Error::new(
-                    span(dollar_sign..end_idx),
-                    "`$` must be followed by a valid identifier; use `$$` to escape",
-                ));
-            }
-
+            let var_name = parse_dollar_sign(idx, &value, &span, &mut chars)?;
             let out_str = Literal::string(&next_str);
             next_str.clear();
-            let var = Ident::new(var_name, span(dollar_sign..end_idx));
-            output.push((out_str, Some(var)));
+            output.push((out_str, Some(var_name)));
         } else {
             // Literal char.
             next_str.push(ch);
@@ -186,6 +166,40 @@ fn parse_gen_format_str(input: LitStr) -> Result<Vec<(Literal, Option<Ident>)>> 
         output.push((Literal::string(&next_str), None))
     }
     Ok(output)
+}
+
+fn parse_dollar_sign(
+    dollar_sign: usize,
+    value: &str,
+    span: &impl Fn(Range<usize>) -> Span,
+    chars: &mut Peekable<impl Iterator<Item = (usize, char)>>,
+) -> Result<Ident> {
+    let (var_start, end) = if chars.peek().unwrap().1 == '{' {
+        let end = chars
+            .find(|c| c.1 == '}')
+            .ok_or_else(|| Error::new(span(dollar_sign..dollar_sign + 1), "Unterminated `{`"))?
+            .0;
+        (dollar_sign + 2, end)
+    } else {
+        let mut end = value.len();
+        while let Some((idx, ch)) = chars.peek().cloned() {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                chars.next();
+            } else {
+                end = idx;
+                break;
+            }
+        }
+        (dollar_sign + 1, end)
+    };
+    let var_name = &value[var_start..end];
+    if !syn::parse_str::<Ident>(var_name).is_ok() {
+        return Err(Error::new(
+            span(dollar_sign..end),
+            "`$` must be followed by a valid identifier; use `$$` to escape",
+        ));
+    }
+    Ok(Ident::new(var_name, span(dollar_sign..end)))
 }
 
 /// Takes a valid LitStr and returns a String of its contents, plus a function to

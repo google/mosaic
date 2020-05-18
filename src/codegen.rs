@@ -87,7 +87,7 @@ fn gen_method(
 
     let func_name = &func.name;
     let struct_name = &st.name;
-    let trait_name = snippet!(db, "${struct_name}_${func_name}_Ext")?;
+    let trait_name = snippet!(db, "${struct_name}_${func_name}_Ext");
 
     // Create an extension trait for our method.
     write_gen!(f, db, "

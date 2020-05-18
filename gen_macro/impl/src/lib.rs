@@ -95,13 +95,14 @@ pub fn snippet(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 fn snippet_impl(input: SnippetMacroInput) -> Result<TokenStream> {
     let try_body = write_to(quote!(&mut writer), input.ctx, input.fmt_str)?;
+    // unwrap ok because writing to a Vec can't fail
     Ok(quote! {
         (|| -> ::std::io::Result<::gen_macro::Snippet> {
             let mut buf = ::std::vec::Vec::<u8>::new();
             let mut writer = ::gen_macro::CodeWriter::new(&mut buf);
             #try_body
             Ok(::gen_macro::Snippet::from(buf))
-        })()
+        })().unwrap()
     })
 }
 

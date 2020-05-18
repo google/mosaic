@@ -4,7 +4,7 @@
 
 use crate::ir::cc::RsIr;
 use crate::ir::rs;
-use gen_macro::{snippet, write_gen, Gen, Snippet};
+use gen_macro::{snippet, write_gen, CodeWriter, Gen, Snippet};
 use itertools::Itertools;
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream};
 use quote::{ToTokens, TokenStreamExt};
@@ -26,63 +26,6 @@ pub fn perform_codegen(
         }
     }
     Ok(())
-}
-
-struct CodeWriter<'a> {
-    inner: &'a mut dyn io::Write,
-    indent: u16,
-    newline: bool,
-}
-impl<'a> CodeWriter<'a> {
-    fn new(out: &'a mut impl io::Write) -> Self {
-        CodeWriter {
-            inner: out,
-            indent: 0,
-            newline: true,
-        }
-    }
-    fn with_indent<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        self.indent += 1;
-        let result = f(self);
-        self.indent -= 1;
-        result
-    }
-}
-impl io::Write for CodeWriter<'_> {
-    fn write(&mut self, mut buf: &[u8]) -> io::Result<usize> {
-        let len = buf.len();
-        //let mut unindented = unindent_bytes(buf);
-        //dbg!(String::from_utf8_lossy(buf));
-        //dbg!(String::from_utf8_lossy(&unindented));
-        //if let Some(b'\n') = buf.last() {
-        //    unindented.push(b'\n');
-        //}
-        //let mut buf: &[u8] = &unindented;
-        while !buf.is_empty() {
-            if self.newline {
-                for _ in 0..self.indent {
-                    self.inner.write_all(b"    ")?;
-                }
-            }
-            match buf.iter().position(|b| *b == b'\n') {
-                Some(i) => {
-                    let next_line = i + 1;
-                    self.inner.write_all(&buf[..next_line])?;
-                    buf = &buf[next_line..];
-                    self.newline = true;
-                }
-                None => {
-                    self.inner.write_all(buf)?;
-                    buf = &[];
-                    self.newline = false;
-                }
-            }
-        }
-        Ok(len)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
-    }
 }
 
 trait Codegen {
@@ -263,12 +206,12 @@ impl ToTokens for rs::Path {
 }
 
 impl<DB> Gen<DB> for rs::Ident {
-    fn gen(&self, _db: &DB, f: &mut impl io::Write) -> io::Result<()> {
+    fn gen(&self, _db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
         write!(f, "{}", self.as_str())
     }
 }
 impl<DB> Gen<DB> for rs::Path {
-    fn gen(&self, _db: &DB, f: &mut impl io::Write) -> io::Result<()> {
+    fn gen(&self, _db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
         for token in self.iter().map(rs::Ident::as_str).intersperse("::") {
             write!(f, "{}", token)?;
         }
@@ -280,7 +223,7 @@ impl ToTokensDb for rs::Ty {
     fn to_tokens_db(&self, db: &impl RsIr, ts: &mut TokenStream) {
         use rs::Ty::*;
         let name = match self {
-            Error => "<error>",
+            Error => "{error}",
             U8 => "u8",
             I8 => "i8",
             U16 => "u16",
@@ -314,7 +257,7 @@ impl Codegen for rs::Ty {
 }
 
 impl<DB: RsIr> Gen<DB> for rs::Ty {
-    fn gen(&self, db: &DB, f: &mut impl io::Write) -> io::Result<()> {
+    fn gen(&self, db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
         let mut ts = TokenStream::new();
         self.with_db(db).to_tokens(&mut ts);
         write!(f, "{}", ts)

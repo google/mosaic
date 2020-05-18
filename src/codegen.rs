@@ -6,13 +6,7 @@ use crate::ir::cc::RsIr;
 use crate::ir::rs;
 use gen_macro::{snippet, write_gen, CodeWriter, Gen, Snippet};
 use itertools::Itertools;
-use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream};
-use quote::{ToTokens, TokenStreamExt};
-use std::{
-    borrow::Borrow,
-    fmt,
-    io::{self, Write},
-};
+use std::io::{self, Write};
 
 pub fn perform_codegen(
     db: &impl RsIr,
@@ -22,18 +16,14 @@ pub fn perform_codegen(
     let mut out = CodeWriter::new(out);
     for item in &mdl.items {
         match item {
-            rs::ItemKind::Struct(st) => st.lookup(db).codegen(db, &mut out)?,
+            rs::ItemKind::Struct(st) => st.lookup(db).gen(db, &mut out)?,
         }
     }
     Ok(())
 }
 
-trait Codegen {
-    fn codegen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()>;
-}
-
-impl Codegen for rs::Visibility {
-    fn codegen(&self, _db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
+impl<DB: RsIr> Gen<DB> for rs::Visibility {
+    fn gen(&self, _db: &DB, f: &mut CodeWriter) -> io::Result<()> {
         Ok(match self {
             rs::Visibility::Public => write!(f, "pub ")?,
             rs::Visibility::Private => (),
@@ -41,16 +31,16 @@ impl Codegen for rs::Visibility {
     }
 }
 
-impl Codegen for rs::Struct {
-    fn codegen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
+impl<DB: RsIr> Gen<DB> for rs::Struct {
+    fn gen(&self, db: &DB, f: &mut CodeWriter) -> io::Result<()> {
         writeln!(f, "#[repr(C, align({}))]", self.align)?;
-        self.vis.codegen(db, f)?;
+        self.vis.gen(db, f)?;
         writeln!(f, "struct {} {{", self.name)?;
         f.with_indent(|f| -> io::Result<()> {
             for field in &self.fields {
-                field.vis.codegen(db, f)?;
+                field.vis.gen(db, f)?;
                 write!(f, "{}: ", field.name)?;
-                field.ty(db).codegen(db, f)?;
+                field.ty(db).gen(db, f)?;
                 writeln!(f, ",")?;
             }
             Ok(())
@@ -80,8 +70,8 @@ fn gen_method(
     let arg_names = arg_names(meth);
     let args_sig: Snippet = arg_names
         .iter()
-        .zip(meth.param_tys(db).with_db(db))
-        .map(|(name, ty)| format!("{}: {}", name, ty))
+        .zip(meth.param_tys(db))
+        .map(|(name, ty)| snippet!(db, "$name: $ty").to_string())
         .join(", ")
         .into();
 
@@ -139,72 +129,6 @@ impl<DB: RsIr> DbRef for &'_ DB {
     }
 }
 
-/// Used to attach a database ref to a value, so it can be used inside `quote!`.
-trait WithDB: Sized {
-    fn with_db<DB: DbRef>(self, db: DB) -> Context<DB, Self>;
-}
-impl<T> WithDB for T {
-    fn with_db<DB: DbRef>(self, db: DB) -> Context<DB, Self> {
-        Context { db, inner: self }
-    }
-}
-
-struct Context<DB: DbRef, T> {
-    db: DB,
-    inner: T,
-}
-
-impl<DB: DbRef, T> Iterator for Context<DB, T>
-where
-    T: Iterator,
-{
-    type Item = Context<DB, T::Item>;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|v| v.with_db(self.db))
-    }
-}
-
-trait ToTokensDb {
-    fn to_tokens_db(&self, db: &impl RsIr, ts: &mut TokenStream);
-}
-impl<T: ToTokensDb> ToTokensDb for &'_ T {
-    fn to_tokens_db(&self, db: &impl RsIr, ts: &mut TokenStream) {
-        (*self).to_tokens_db(db, ts)
-    }
-}
-
-impl<'a, DB: DbRef, T: ToTokensDb> ToTokens for Context<DB, T> {
-    fn to_tokens(&self, ts: &mut TokenStream) {
-        self.inner.borrow().to_tokens_db(self.db.get(), ts)
-    }
-}
-impl<'a, DB: DbRef, T: ToTokensDb> fmt::Display for Context<DB, T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut ts = TokenStream::new();
-        self.inner.borrow().to_tokens_db(self.db.get(), &mut ts);
-        write!(f, "{}", ts)
-    }
-}
-
-struct DoubleColon;
-impl ToTokens for DoubleColon {
-    fn to_tokens(&self, ts: &mut TokenStream) {
-        ts.append(Punct::new(':', Spacing::Joint));
-        ts.append(Punct::new(':', Spacing::Alone));
-    }
-}
-
-impl ToTokens for rs::Ident {
-    fn to_tokens(&self, ts: &mut TokenStream) {
-        ts.append(Ident::new(self.as_str(), Span::call_site()));
-    }
-}
-impl ToTokens for rs::Path {
-    fn to_tokens(&self, ts: &mut TokenStream) {
-        ts.append_separated(self.iter(), DoubleColon)
-    }
-}
-
 impl<DB> Gen<DB> for rs::Ident {
     fn gen(&self, _db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
         write!(f, "{}", self.as_str())
@@ -219,8 +143,8 @@ impl<DB> Gen<DB> for rs::Path {
     }
 }
 
-impl ToTokensDb for rs::Ty {
-    fn to_tokens_db(&self, db: &impl RsIr, ts: &mut TokenStream) {
+impl<DB: RsIr> Gen<DB> for rs::Ty {
+    fn gen(&self, db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
         use rs::Ty::*;
         let name = match self {
             Error => "{error}",
@@ -237,30 +161,9 @@ impl ToTokensDb for rs::Ty {
             F32 => "f32",
             F64 => "f64",
             Bool => "bool",
-            Struct(id) => return id.lookup(db).name.to_tokens(ts),
+            Struct(id) => return id.lookup(db).name.gen(db, f),
         };
-        ts.append(Ident::new(name, Span::call_site()));
-    }
-}
-impl ToTokensDb for rs::Function {
-    fn to_tokens_db(&self, _db: &impl RsIr, _ts: &mut TokenStream) {
-        todo!()
-    }
-}
-
-impl Codegen for rs::Ty {
-    fn codegen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
-        let mut ts = TokenStream::new();
-        self.with_db(db).to_tokens(&mut ts);
-        write!(f, "{}", ts)
-    }
-}
-
-impl<DB: RsIr> Gen<DB> for rs::Ty {
-    fn gen(&self, db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
-        let mut ts = TokenStream::new();
-        self.with_db(db).to_tokens(&mut ts);
-        write!(f, "{}", ts)
+        write!(f, "{}", name)
     }
 }
 

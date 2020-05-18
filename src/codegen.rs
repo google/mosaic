@@ -4,7 +4,7 @@
 
 use crate::ir::cc::RsIr;
 use crate::ir::rs;
-use gen_macro::write_gen;
+use gen_macro::{write_gen, Gen, Snippet};
 use itertools::Itertools;
 use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream};
 use quote::{ToTokens, TokenStreamExt};
@@ -22,7 +22,7 @@ pub fn perform_codegen(
     let mut out = CodeWriter::new(out);
     for item in &mdl.items {
         match item {
-            rs::ItemKind::Struct(st) => st.lookup(db).gen(db, &mut out)?,
+            rs::ItemKind::Struct(st) => st.lookup(db).codegen(db, &mut out)?,
         }
     }
     Ok(())
@@ -86,11 +86,11 @@ impl io::Write for CodeWriter<'_> {
 }
 
 trait Codegen {
-    fn gen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()>;
+    fn codegen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()>;
 }
 
 impl Codegen for rs::Visibility {
-    fn gen(&self, _db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
+    fn codegen(&self, _db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
         Ok(match self {
             rs::Visibility::Public => write!(f, "pub ")?,
             rs::Visibility::Private => (),
@@ -99,15 +99,15 @@ impl Codegen for rs::Visibility {
 }
 
 impl Codegen for rs::Struct {
-    fn gen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
+    fn codegen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
         writeln!(f, "#[repr(C, align({}))]", self.align)?;
-        self.vis.gen(db, f)?;
+        self.vis.codegen(db, f)?;
         writeln!(f, "struct {} {{", self.name)?;
         f.with_indent(|f| -> io::Result<()> {
             for field in &self.fields {
-                field.vis.gen(db, f)?;
+                field.vis.codegen(db, f)?;
                 write!(f, "{}: ", field.name)?;
-                field.ty(db).gen(db, f)?;
+                field.ty(db).codegen(db, f)?;
                 writeln!(f, ",")?;
             }
             Ok(())
@@ -135,25 +135,26 @@ fn gen_method(
     debug_assert_eq!(func.param_tys.len(), func.param_names.len());
 
     let arg_names = arg_names(meth);
-    let args_sig = arg_names
+    let args_sig: Snippet = arg_names
         .iter()
         .zip(meth.param_tys(db).with_db(db))
         .map(|(name, ty)| format!("{}: {}", name, ty))
-        .join(", ");
+        .join(", ")
+        .into();
 
     let func_name = &func.name;
     let struct_name = &st.name;
-    let trait_name = format!("{}_{}_Ext", st.name, func.name);
+    let trait_name: Snippet = format!("{}_{}_Ext", st.name, func.name).into();
 
     // Create an extension trait for our method.
-    write_gen!(f, "
+    write_gen!(f, db, "
         trait $trait_name {
             fn $func_name(self, $args_sig);
         }
     ")?;
 
     // impl the extension trait for NonNull<Struct>.
-    write_gen!(f, "
+    write_gen!(f, db, "
         impl $trait_name for ::core::ptr::NonNull<$struct_name> {
             fn $func_name(self, $args_sig) {
                 todo!()
@@ -162,8 +163,8 @@ fn gen_method(
     ")?;
 
     // Create a convenience wrapper for &mut self.
-    let arg_names = arg_names.iter().join(", ");
-    write_gen!(f, "
+    let arg_names: Snippet = arg_names.iter().join(", ").into();
+    write_gen!(f, db, "
         impl $struct_name {
             fn $func_name(&mut self, $args_sig) {
                 ::core::ptr::NonNull::from(self).$func_name($arg_names)
@@ -261,6 +262,20 @@ impl ToTokens for rs::Path {
     }
 }
 
+impl<DB> Gen<DB> for rs::Ident {
+    fn gen(&self, _db: &DB, f: &mut impl io::Write) -> io::Result<()> {
+        write!(f, "{}", self.as_str())
+    }
+}
+impl<DB> Gen<DB> for rs::Path {
+    fn gen(&self, _db: &DB, f: &mut impl io::Write) -> io::Result<()> {
+        for token in self.iter().map(rs::Ident::as_str).intersperse("::") {
+            write!(f, "{}", token)?;
+        }
+        Ok(())
+    }
+}
+
 impl ToTokensDb for rs::Ty {
     fn to_tokens_db(&self, db: &impl RsIr, ts: &mut TokenStream) {
         use rs::Ty::*;
@@ -285,13 +300,21 @@ impl ToTokensDb for rs::Ty {
     }
 }
 impl ToTokensDb for rs::Function {
-    fn to_tokens_db(&self, db: &impl RsIr, ts: &mut TokenStream) {
+    fn to_tokens_db(&self, _db: &impl RsIr, _ts: &mut TokenStream) {
         todo!()
     }
 }
 
 impl Codegen for rs::Ty {
-    fn gen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
+    fn codegen(&self, db: &impl RsIr, f: &mut CodeWriter) -> io::Result<()> {
+        let mut ts = TokenStream::new();
+        self.with_db(db).to_tokens(&mut ts);
+        write!(f, "{}", ts)
+    }
+}
+
+impl<DB: RsIr> Gen<DB> for rs::Ty {
+    fn gen(&self, db: &DB, f: &mut impl io::Write) -> io::Result<()> {
         let mut ts = TokenStream::new();
         self.with_db(db).to_tokens(&mut ts);
         write!(f, "{}", ts)

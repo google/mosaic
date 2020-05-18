@@ -1,9 +1,9 @@
 extern crate proc_macro;
 
-use proc_macro2::{Ident, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Ident, Literal, Span, TokenStream, TokenTree};
 use proc_macro_hack::proc_macro_hack;
-use quote::{quote, ToTokens, TokenStreamExt};
-use std::collections::BTreeMap;
+use quote::{quote, quote_spanned, ToTokens, TokenStreamExt};
+use std::iter::Peekable;
 use std::ops::Range;
 use syn::{
     parse::{Parse, ParseStream},
@@ -11,10 +11,10 @@ use syn::{
     punctuated::Punctuated,
     Error, Expr, LitStr, Result, Token,
 };
-use unindent::unindent;
 
 struct WriteGenMacroInput {
     file: Expr,
+    ctx: Expr,
     fmt_str: LitStr,
 }
 
@@ -26,6 +26,10 @@ impl Parse for WriteGenMacroInput {
             .next()
             .ok_or(Error::new_spanned(&arg_list, "Expected file expr"))?
             .clone();
+        let ctx = args
+            .next()
+            .ok_or(Error::new_spanned(&arg_list, "Expected context expr"))?
+            .clone();
         let fmt_str = args
             .next()
             .ok_or(Error::new_spanned(&arg_list, "Expected format string"))?;
@@ -34,7 +38,7 @@ impl Parse for WriteGenMacroInput {
             Some(tok) => return Err(Error::new_spanned(tok, "Unexpected token")),
             None => (),
         }
-        Ok(WriteGenMacroInput { file, fmt_str })
+        Ok(WriteGenMacroInput { file, ctx, fmt_str })
     }
 }
 
@@ -47,29 +51,45 @@ pub fn write_gen(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 fn write_gen_impl(input: WriteGenMacroInput) -> Result<TokenStream> {
-    let (format_str, vars) = parse_gen_format_str(input.fmt_str)?;
+    let try_body = write_to(input.file, input.ctx, input.fmt_str)?;
+    Ok(quote! {
+        (|| -> ::std::io::Result<()> {
+            #try_body
+            Ok(())
+        })()
+    })
+}
 
-    let extra_format_args = {
-        let mut ts = TokenStream::new();
-        ts.append_separated(
-            vars.iter().map(|var| quote!(#var=#var)),
-            Punct::new(',', Spacing::Alone),
-        );
-        ts
-    };
-
-    let file = input.file;
-    let unindented = unindent(&format_str);
-    Ok(quote! { write!(#file, #unindented, #extra_format_args) })
+fn write_to(file: impl ToTokens, ctx: Expr, fmt_str: LitStr) -> Result<TokenStream> {
+    let pieces = parse_gen_format_str(fmt_str)?;
+    let mut ts = TokenStream::new();
+    for (lit_str, ident) in pieces {
+        ts.append_all(quote! {
+            ::std::io::Write::write_all(#file, #lit_str.as_bytes())?;
+        });
+        if let Some(ident) = ident {
+            ts.append_all(quote_spanned! { ident.span()=>
+                ::gen_macro::Gen::gen(&#ident, #ctx, #file)?;
+            });
+        }
+    }
+    Ok(ts)
 }
 
 /// Parses strings that use $var interpolation and produces a format string
 /// suitable for format!, along with a list of interpolated variables.
-fn parse_gen_format_str(input: LitStr) -> Result<(String, Vec<Ident>)> {
+fn parse_gen_format_str(input: LitStr) -> Result<Vec<(Literal, Option<Ident>)>> {
     let (value, span) = get_str_contents(input);
+    let (skip_first, indent) = measure_indent(&value);
+
     let mut chars = value.char_indices().peekable();
-    let mut output_str = String::with_capacity(value.len() * 2);
-    let mut vars = BTreeMap::new();
+    if skip_first {
+        skip_line(&mut chars);
+    }
+    skip_indent(indent, &mut chars);
+
+    let mut next_str = String::new();
+    let mut output = vec![];
     while let Some((idx, ch)) = chars.next() {
         if ch == '$' {
             let next = chars.peek().ok_or(Error::new(
@@ -78,7 +98,7 @@ fn parse_gen_format_str(input: LitStr) -> Result<(String, Vec<Ident>)> {
             ))?;
             if next.1 == '$' {
                 // Escaped $, consume it and move on.
-                output_str.push(ch);
+                next_str.push(ch);
                 chars.next();
                 continue;
             }
@@ -103,26 +123,25 @@ fn parse_gen_format_str(input: LitStr) -> Result<(String, Vec<Ident>)> {
                 ));
             }
 
-            vars.entry(var_name).or_insert(span(dollar_sign..end_idx));
-            output_str.push('{');
-            output_str.extend(var_name.chars());
-            output_str.push('}');
+            let out_str = Literal::string(&next_str);
+            next_str.clear();
+            let var = Ident::new(var_name, span(dollar_sign..end_idx));
+            output.push((out_str, Some(var)));
         } else {
             // Literal char.
-            output_str.push(ch);
+            next_str.push(ch);
 
-            // Escape braces in format string.
-            if ch == '{' || ch == '}' {
-                output_str.push(ch);
+            if ch == '\n' {
+                // Skip indentation of next line.
+                skip_indent(indent, &mut chars);
             }
         }
     }
 
-    let vars = vars
-        .into_iter()
-        .map(|(var_name, span)| Ident::new(var_name, span))
-        .collect();
-    Ok((output_str, vars))
+    if !next_str.is_empty() {
+        output.push((Literal::string(&next_str), None))
+    }
+    Ok(output)
 }
 
 /// Takes a valid LitStr and returns a String of its contents, plus a function to
@@ -147,6 +166,45 @@ fn get_str_contents(input: LitStr) -> (String, impl Fn(Range<usize>) -> Span) {
         literal.subspan(range).unwrap_or(input.span())
     };
     (value.to_owned(), span)
+}
+
+fn measure_indent(input: &str) -> (bool, usize) {
+    let not_space = |c| c != ' ';
+    let mut lines = input.lines();
+    // Skip the first line for measuring indentation, and also see if it should
+    // be skipped in the output because it contains only spaces.
+    let skip_first = lines
+        .next()
+        .map(|l| l.chars().position(not_space).is_none())
+        .unwrap_or(false);
+    let indent = lines
+        .flat_map(|l| l.chars().position(not_space))
+        .min()
+        .unwrap_or(0);
+    (skip_first, indent)
+}
+
+fn skip_line(chars: &mut impl Iterator<Item = (usize, char)>) {
+    while let Some((_, ch)) = chars.next() {
+        if ch == '\n' {
+            break;
+        }
+    }
+}
+
+fn skip_indent(indent: usize, chars: &mut Peekable<impl Iterator<Item = (usize, char)>>) {
+    for _ in 0..indent {
+        match chars.peek().map(|(_, ch)| ch) {
+            // Blank or space-only lines can be less than the min indent. Be
+            // careful not to eat the \r, if there is one.
+            Some('\r') | Some('\n') => break,
+            None => break,
+            Some(c) => {
+                debug_assert_eq!(*c, ' ');
+                chars.next();
+            }
+        }
+    }
 }
 
 #[cfg(test)]

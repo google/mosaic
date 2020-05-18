@@ -60,6 +60,50 @@ fn write_gen_impl(input: WriteGenMacroInput) -> Result<TokenStream> {
     })
 }
 
+struct SnippetMacroInput {
+    ctx: Expr,
+    fmt_str: LitStr,
+}
+
+impl Parse for SnippetMacroInput {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let arg_list: Punctuated<Expr, Token![,]> = input.parse_terminated(Expr::parse)?;
+        let mut args = arg_list.iter();
+        let ctx = args
+            .next()
+            .ok_or(Error::new_spanned(&arg_list, "Expected context expr"))?
+            .clone();
+        let fmt_str = args
+            .next()
+            .ok_or(Error::new_spanned(&arg_list, "Expected format string"))?;
+        let fmt_str: LitStr = syn::parse2(fmt_str.to_token_stream())?;
+        match args.next() {
+            Some(tok) => return Err(Error::new_spanned(tok, "Unexpected token")),
+            None => (),
+        }
+        Ok(SnippetMacroInput { ctx, fmt_str })
+    }
+}
+
+#[proc_macro_hack]
+pub fn snippet(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let expr = parse_macro_input!(input as SnippetMacroInput);
+    snippet_impl(expr)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+fn snippet_impl(input: SnippetMacroInput) -> Result<TokenStream> {
+    let try_body = write_to(quote!(&mut buf), input.ctx, input.fmt_str)?;
+    Ok(quote! {
+        (|| -> ::std::io::Result<::gen_macro::Snippet> {
+            let mut buf = ::std::vec::Vec::<u8>::new();
+            #try_body
+            Ok(::gen_macro::Snippet::from(buf))
+        })()
+    })
+}
+
 fn write_to(file: impl ToTokens, ctx: Expr, fmt_str: LitStr) -> Result<TokenStream> {
     let pieces = parse_gen_format_str(fmt_str)?;
     let mut ts = TokenStream::new();

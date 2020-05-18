@@ -4,6 +4,9 @@ use std::io;
 #[proc_macro_hack]
 pub use gen_macro_impl::write_gen;
 
+#[proc_macro_hack]
+pub use gen_macro_impl::snippet;
+
 pub trait Gen<Ctx = ()> {
     fn gen(&self, ctx: &Ctx, writer: &mut impl io::Write) -> io::Result<()>;
 }
@@ -30,6 +33,11 @@ pub struct Snippet(Vec<u8>);
 impl From<String> for Snippet {
     fn from(code: String) -> Self {
         Snippet(code.into_bytes())
+    }
+}
+impl From<Vec<u8>> for Snippet {
+    fn from(code: Vec<u8>) -> Self {
+        Snippet(code)
     }
 }
 impl ToString for Snippet {

@@ -89,7 +89,12 @@ fn main() -> Result<(), libclang::Error> {
             Ok(rs_module) => {
                 let out = io::stdout();
                 let mut out = out.lock();
-                codegen::perform_codegen(db, &rs_module, &mut out).expect("Codegen failed");
+                let outputs = codegen::Outputs {
+                    rs: Some(codegen::CodeWriter::new(&mut out)),
+                    cc: None,
+                    hdr: None,
+                };
+                codegen::perform_codegen(db, &rs_module, outputs).expect("Codegen failed");
             }
             Err(errs) => errs.clone().emit(db, diags),
         };

@@ -330,6 +330,9 @@ pub mod cc {
 
     pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
 
+    pub trait CcIr: AstMethods {}
+    impl<T> CcIr for T where T: AstMethods {}
+
     #[salsa::query_group(RsIrStorage)]
     #[salsa::requires(AstMethods)]
     #[salsa::requires(IrMethods)]
@@ -531,6 +534,17 @@ pub mod cc {
         /// For non-static methods, whether `this` is const.
         pub is_const: bool,
     }
+    impl Function {
+        pub fn param_tys<'a>(&'a self, db: &'a impl CcIr) -> impl Iterator<Item = Ty> + 'a {
+            // skip_errs okay because errors get collected by Struct::to_rust()
+            self.param_tys
+                .iter()
+                .map(move |ty_ref| ty_ref.as_cc(db).skip_errs())
+        }
+        pub fn return_ty(&self, db: &impl CcIr) -> Ty {
+            self.return_ty.as_cc(db).skip_errs()
+        }
+    }
 
     impl Struct {
         pub fn to_rust(&self, db: &(impl RsIr + AstMethods), id: StructId) -> Outcome<rs::Struct> {
@@ -564,7 +578,7 @@ pub mod cc {
                     // Check method types.
                     self.methods
                         .iter()
-                        .flat_map(|meth| meth.param_tys.iter())
+                        .flat_map(|meth| meth.param_tys.iter().chain(Some(&meth.return_ty)))
                         .map(|ty| ty.as_rs(db).map(|_| ()))
                         .collect::<Outcome<Vec<()>>>()
                         .map(|_| ())
@@ -584,6 +598,7 @@ pub mod cc {
                     size: self.size,
                     align: self.align,
                     span: self.span.clone(),
+                    cc_id: id,
                 })
         }
 
@@ -765,6 +780,8 @@ pub mod rs {
         pub size: Size,
         pub align: Align,
         pub span: Span,
+        // TODO: We might need a more general way of doing this. (Similar to TypeRef?)
+        pub cc_id: cc::StructId,
     }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -779,6 +796,12 @@ pub mod rs {
                 .param_tys
                 .iter()
                 .map(move |ty_ref| ty_ref.as_rs(db).skip_errs())
+        }
+        pub fn return_ty(&self, db: &impl RsIr) -> Ty {
+            self.0.return_ty.as_rs(db).skip_errs()
+        }
+        pub fn cc_func(&self, _db: &impl RsIr) -> cc::Function {
+            self.0.clone()
         }
     }
 

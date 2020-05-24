@@ -26,7 +26,11 @@ macro_rules! cpp_lower {
 
 macro_rules! cpp_to_rs {
     { $sess:expr, $src:tt => $out:expr } => {
-        $crate::test_util::check_codegen(&mut $sess, stringify!($src), $out)
+        $crate::test_util::check_codegen(&mut $sess, stringify!($src), $out, None)
+    };
+    { $sess:expr, $src:tt => $rs_out:expr, $cc_out:expr } => {
+        $crate::test_util::check_codegen(
+            &mut $sess, stringify!($src), $rs_out, Some($cc_out))
     };
 }
 
@@ -83,17 +87,36 @@ pub(crate) fn parse_and_lower(
     rust_ir.clone()
 }
 
-pub(crate) fn check_codegen(sess: &mut Session, src: &str, expected: &str) {
-    let expected = strip_indent(expected);
-
+pub(crate) fn check_codegen(
+    sess: &mut Session,
+    src: &str,
+    rs_expected: &str,
+    cc_expected: Option<&str>,
+) {
     let rs_module = parse_and_lower(sess, src, vec![]);
-    let mut out = vec![];
-    codegen::perform_codegen(&sess.db, &rs_module, &mut out).expect("Codegen failed");
-    let output = String::from_utf8(out).expect("Generated code is not UTF-8");
+    let mut rs_out = vec![];
+    let mut cc_out = vec![];
+    let outputs = codegen::Outputs {
+        rs: Some(codegen::CodeWriter::new(&mut rs_out)),
+        cc: Some(codegen::CodeWriter::new(&mut cc_out)),
+        hdr: None,
+    };
+    codegen::perform_codegen(&sess.db, &rs_module, outputs).expect("Codegen failed");
 
-    let expected = expected.trim_matches('\n');
-    let output = output.trim_matches('\n');
-    assert_eq!(MultilineStr(&expected), MultilineStr(&output));
+    let check = |lang, out, expected| {
+        let output = String::from_utf8(out).expect("Generated code is not UTF-8");
+        let output = output.trim_matches('\n');
+        let expected = strip_indent(expected);
+        let expected = expected.trim_matches('\n');
+        assert_eq!(
+            MultilineStr(&expected),
+            MultilineStr(&output),
+            "Generated {} did not match",
+            lang
+        );
+    };
+    check("Rust", rs_out, rs_expected);
+    check("C++", cc_out, cc_expected.unwrap_or(""));
 }
 
 #[derive(Eq, PartialEq)]

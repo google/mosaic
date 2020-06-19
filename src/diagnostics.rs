@@ -311,7 +311,7 @@ impl Diagnostics {
     ///
     /// The conventional way to call this method is using UFCS, e.g.
     ///
-    /// ```
+    /// ```ignore
     /// Diagnostics::merge(&first, &second)
     /// ```
     ///

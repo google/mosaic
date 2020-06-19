@@ -91,7 +91,7 @@ struct Opts {
     input: String,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     use ir::cc::RsIr;
 
     let opts = Opts::from_args();
@@ -111,9 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_base = {
         let mut name = input_path.file_stem().unwrap().to_os_string();
         name.push("_bind");
-        let mut out = out_dir.to_path_buf();
-        out.push(name);
-        out
+        out_dir.join(name)
     };
     let include_path = input_path
         .file_name()
@@ -146,6 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     });
 
+    // TODO don't emit if there are errors
     out_rs.persist(out_base.with_extension("rs"))?;
     out_cc.persist(out_base.with_extension("cc"))?;
 

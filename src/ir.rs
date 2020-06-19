@@ -172,6 +172,7 @@ trait Visitor<DB: IrMethods + AstMethods> {
         use cc::Ty::*;
         match ty {
             Error => (),
+            Void => (),
             Float | Double => (),
             Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS | CharU
             | SChar | UChar | Size | SSize | PtrDiff => (),
@@ -395,6 +396,8 @@ pub mod cc {
     pub enum Ty {
         Error,
 
+        Void,
+
         Short,
         UShort,
         Int,
@@ -428,6 +431,7 @@ pub mod cc {
             use Ty::*;
             match self {
                 Error => false,
+                Void => false,
                 Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS
                 | CharU | SChar | UChar | Size | SSize | PtrDiff => true,
                 Float | Double => false,
@@ -440,6 +444,7 @@ pub mod cc {
             use Ty::*;
             match self {
                 Error => false,
+                Void => false,
                 Float | Double => true,
                 Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS
                 | CharU | SChar | UChar | Size | SSize | PtrDiff => false,
@@ -452,6 +457,7 @@ pub mod cc {
             use Ty::*;
             match self {
                 Error => false,
+                Void => true,
                 Float | Double => true,
                 Short | UShort | Int | UInt | Long | ULong | LongLong | ULongLong | CharS
                 | CharU | SChar | UChar | Size | SSize | PtrDiff => true,
@@ -482,6 +488,7 @@ pub mod cc {
             use Ty::*;
             ok(match self {
                 Error => rs::Ty::Error,
+                Void => rs::Ty::Unit,
                 Short => rs::Ty::I16,
                 UShort => rs::Ty::U16,
                 Int => rs::Ty::I32,
@@ -696,6 +703,8 @@ pub mod rs {
     pub enum Ty {
         Error,
 
+        Unit,
+
         U8,
         I8,
         U16,
@@ -717,7 +726,8 @@ pub mod rs {
         pub fn size(&self, db: &impl RsIr) -> Size {
             use Ty::*;
             let sz = match self {
-                Error => 1,
+                Error => 0,
+                Unit => 0, // TODO this depends on context!
                 U8 | I8 => 1,
                 U16 | I16 => 2,
                 U32 | I32 => 4,

@@ -184,6 +184,7 @@ impl<DB: RsIr> Gen<DB> for rs::Ty {
         use rs::Ty::*;
         let name = match self {
             Error => "{error}",
+            Unit => "()",
             U8 => "u8",
             I8 => "i8",
             U16 => "u16",
@@ -208,6 +209,7 @@ impl<DB: CcIr> Gen<DB> for cc::Ty {
         use cc::Ty::*;
         let name = match self {
             Error => "<error>",
+            Void => "void",
             Short => "short",
             UShort => "unsigned short",
             Int => "int",

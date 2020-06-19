@@ -527,6 +527,7 @@ impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
     fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty> {
         use TypeKind::*;
         ok(match self.get_kind() {
+            Void => Ty::Void,
             Int => Ty::Int,
             UInt => Ty::UInt,
             CharS => Ty::CharS,

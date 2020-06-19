@@ -91,9 +91,7 @@ struct Opts {
     input: String,
 }
 
-pub fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use ir::cc::RsIr;
-
+pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
     let opts = Opts::from_args();
     let input_path = PathBuf::from(&opts.input);
     if !input_path.is_file() {
@@ -101,7 +99,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Error: input must exist and be a file: {}",
             input_path.to_string_lossy()
         );
-        std::process::exit(1);
+        return Ok(1);
     }
     let out_dir = opts
         .out_dir
@@ -126,7 +124,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sess = Session::new();
     let parse = libclang::parse(&sess, &input_path.into());
     let diags = &sess.diags;
-    libclang::set_ast(&mut sess.db, parse, |db| {
+    let success = libclang::set_ast(&mut sess.db, parse, |db| {
+        use ir::cc::RsIr;
         let rs_module = db.rs_bindings();
         match rs_module.to_ref().val() {
             Ok(rs_module) => {
@@ -139,14 +138,20 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 codegen::perform_codegen(db, &rs_module, &include_path, false, outputs)
                     .expect("Codegen failed");
+                true
             }
-            Err(errs) => errs.clone().emit(db, diags),
-        };
+            Err(errs) => {
+                errs.clone().emit(db, diags);
+                false
+            }
+        }
     });
 
-    // TODO don't emit if there are errors
+    if !success {
+        return Ok(101);
+    }
     out_rs.persist(out_base.with_extension("rs"))?;
     out_cc.persist(out_base.with_extension("cc"))?;
 
-    Ok(())
+    Ok(0)
 }

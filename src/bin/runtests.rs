@@ -35,6 +35,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut passes = 0usize;
     for test in source_root.join("test").join("run-make").read_dir()? {
         let test = test?.path();
+        if !test.is_dir() {
+            continue;
+        }
         let test_name = test.to_string_lossy().to_string();
 
         print!("test {} ... ", test_name);
@@ -75,6 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
+        println!("");
         println!("failures:");
         for (test, _) in &failures {
             println!("    {}", test);

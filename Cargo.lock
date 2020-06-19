@@ -315,6 +315,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "peasy"
+version = "0.1.0"
+dependencies = [
+ "clang 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "codespan 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
+ "codespan-reporting 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
+ "gen_macro 0.1.0",
+ "itertools 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pretty_assertions 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rental 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "salsa 0.14.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "structopt 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tempfile 3.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "termcolor 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "thiserror 1.0.9 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -514,25 +533,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "smallvec"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-
-[[package]]
-name = "peasy"
-version = "0.1.0"
-dependencies = [
- "clang 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "codespan 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
- "codespan-reporting 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
- "gen_macro 0.1.0",
- "itertools 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "pretty_assertions 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "rental 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "salsa 0.14.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "structopt 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
- "tempfile 3.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "termcolor 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "thiserror 1.0.9 (registry+https://github.com/rust-lang/crates.io-index)",
-]
 
 [[package]]
 name = "stable_deref_trait"

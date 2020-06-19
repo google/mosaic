@@ -2,7 +2,7 @@ RUSTC   ?= rustc
 CC      ?= cc
 AR      ?= ar
 TMPDIR  := $(shell mktemp -d)
-BINDGEN ?= cargo run --
+BINDGEN ?= cargo run --bin=peasy --
 EXTRACXXRSFLAGS := -lstdc++
 
 BARE_RUSTC := $(RUSTC)

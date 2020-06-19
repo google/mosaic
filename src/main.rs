@@ -17,8 +17,13 @@ mod ir;
 mod libclang;
 
 use crate::diagnostics::DiagnosticsCtx;
+
 use salsa;
-use std::{env, io, path::PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
+use structopt::StructOpt;
 
 pub(crate) use libclang::File;
 
@@ -75,14 +80,22 @@ impl Session {
     }
 }
 
+/// Generate bindings from C++ for Rust.
+#[derive(StructOpt)]
+struct Opts {
+    /// where to put output files
+    #[structopt(long)]
+    out_dir: Option<String>,
+
+    /// path to the C++ header file to generate bindings for
+    input: String,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use ir::cc::RsIr;
 
-    let mut sess = Session::new();
-    let input_path: PathBuf = env::args()
-        .nth(1)
-        .expect("Usage: cargo run <cc_file>")
-        .into();
+    let opts = Opts::from_args();
+    let input_path = PathBuf::from(&opts.input);
     if !input_path.is_file() {
         eprintln!(
             "Error: input must exist and be a file: {}",
@@ -90,11 +103,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         std::process::exit(1);
     }
-    let out_dir = input_path.parent().unwrap();
+    let out_dir = opts
+        .out_dir
+        .as_ref()
+        .map(Path::new)
+        .unwrap_or_else(|| input_path.parent().unwrap());
     let out_base = {
         let mut name = input_path.file_stem().unwrap().to_os_string();
         name.push("_bind");
-        input_path.with_file_name(name)
+        let mut out = out_dir.to_path_buf();
+        out.push(name);
+        out
     };
     let include_path = input_path
         .file_name()
@@ -106,6 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_rs = tempfile::Builder::new().tempfile_in(out_dir)?;
     let out_cc = tempfile::Builder::new().tempfile_in(out_dir)?;
 
+    let mut sess = Session::new();
     let parse = libclang::parse(&sess, &input_path.into());
     let diags = &sess.diags;
     libclang::set_ast(&mut sess.db, parse, |db| {

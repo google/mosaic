@@ -16,6 +16,7 @@ codespan-reporting = { git = "https://github.com/tmandry/codespan.git", branch =
 termcolor = "1.1.0"
 lazy_static = "1.4.0"
 salsa = "0.14.1"
+structopt = "0.3"
 rental = "0.5.4"
 itertools = "0.9"
 tempfile = "3.1"

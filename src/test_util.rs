@@ -101,7 +101,8 @@ pub(crate) fn check_codegen(
         cc: Some(codegen::CodeWriter::new(&mut cc_out)),
         hdr: None,
     };
-    codegen::perform_codegen(&sess.db, &rs_module, outputs).expect("Codegen failed");
+    codegen::perform_codegen(&sess.db, &rs_module, "test.h", true, outputs)
+        .expect("Codegen failed");
 
     let check = |lang, out, expected| {
         let output = String::from_utf8(out).expect("Generated code is not UTF-8");

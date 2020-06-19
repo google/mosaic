@@ -79,22 +79,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use ir::cc::RsIr;
 
     let mut sess = Session::new();
-    let filename: PathBuf = env::args().nth(1).expect("Usage: cargo run <cc_file>").into();
-    if !filename.is_file() {
-        eprintln!("Error: input must exist and be a file: {}", filename.to_string_lossy());
+    let input_path: PathBuf = env::args()
+        .nth(1)
+        .expect("Usage: cargo run <cc_file>")
+        .into();
+    if !input_path.is_file() {
+        eprintln!(
+            "Error: input must exist and be a file: {}",
+            input_path.to_string_lossy()
+        );
         std::process::exit(1);
     }
-    let out_dir = filename.parent().unwrap();
-    let out_base= {
-        let mut name = filename.file_stem().unwrap().to_os_string();
+    let out_dir = input_path.parent().unwrap();
+    let out_base = {
+        let mut name = input_path.file_stem().unwrap().to_os_string();
         name.push("_bind");
-        filename.with_file_name(name)
+        input_path.with_file_name(name)
     };
+    let include_path = input_path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .ok_or("Input filename must be valid UTF-8")?
+        .to_owned();
 
     let out_rs = tempfile::Builder::new().tempfile_in(out_dir)?;
     let out_cc = tempfile::Builder::new().tempfile_in(out_dir)?;
 
-    let parse = libclang::parse(&sess, &filename.into());
+    let parse = libclang::parse(&sess, &input_path.into());
     let diags = &sess.diags;
     libclang::set_ast(&mut sess.db, parse, |db| {
         let rs_module = db.rs_bindings();
@@ -107,7 +119,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cc: Some(codegen::CodeWriter::new(&mut cc_writer)),
                     hdr: None,
                 };
-                codegen::perform_codegen(db, &rs_module, outputs).expect("Codegen failed");
+                codegen::perform_codegen(db, &rs_module, &include_path, false, outputs)
+                    .expect("Codegen failed");
             }
             Err(errs) => errs.clone().emit(db, diags),
         };

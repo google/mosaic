@@ -19,9 +19,24 @@ pub(crate) struct Outputs<'a> {
 pub(crate) fn perform_codegen(
     db: &(impl RsIr + CcIr),
     mdl: &rs::Module,
+    include_path: &str,
+    skip_header: bool,
     mut out: Outputs<'_>,
 ) -> io::Result<()> {
     let out = &mut out;
+
+    if !skip_header {
+        if let Some(rs) = out.rs.as_mut() {
+            writeln!(rs, "#![allow(non_camel_case_types)]")?;
+            writeln!(rs, "extern crate core;")?;
+            writeln!(rs, "")?;
+        }
+        if let Some(cc) = out.cc.as_mut() {
+            writeln!(cc, "#include \"{}\"", include_path)?;
+            writeln!(cc, "")?;
+        }
+    }
+
     for item in &mdl.items {
         match item {
             rs::ItemKind::Struct(st) => gen_struct(db, &st.lookup(db), out)?,
@@ -76,8 +91,8 @@ fn gen_method(
     debug_assert_eq!(func.param_tys.len(), func.param_names.len());
     assert!(func.is_method, "static methods aren't supported yet");
 
-    let mangled_path = st.name.to_string().replace("::", "$$");
-    let c_func_name: Snippet = format!("{}$${}", mangled_path, func.name).into();
+    let mangled_path = st.name.to_string().replace("::", "__");
+    let c_func_name: Snippet = format!("_bind_{}__{}", mangled_path, func.name).into();
 
     if let Some(rs) = out.rs.as_mut() {
         let arg_names = arg_names(meth);
@@ -96,24 +111,25 @@ fn gen_method(
 
         // Create an extension trait for our method.
         write_gen!(db, rs, "
-            trait $trait_name {
+            pub trait $trait_name {
                 fn $func_name(self, $args_sig) -> $ret_ty;
             }
         ")?;
 
         // impl the extension trait for NonNull<Struct>.
-        write_gen!(db, rs, "
+        write_gen!(db, rs, r#"
             impl $trait_name for ::core::ptr::NonNull<$struct_name> {
                 fn $func_name(self, $args_sig) -> $ret_ty {
-                    $c_func_name(self.as_ptr(), $arg_names)
+                    extern "C" { fn $c_func_name(this: *mut $struct_name, $args_sig) -> $ret_ty; }
+                    unsafe { $c_func_name(self.as_ptr(), $arg_names) }
                 }
             }
-        ")?;
+        "#)?;
 
         // Create a convenience wrapper for &mut self.
         write_gen!(db, rs, "
             impl $struct_name {
-                fn $func_name(&mut self, $args_sig) -> $ret_ty {
+                pub fn $func_name(&mut self, $args_sig) -> $ret_ty {
                     ::core::ptr::NonNull::from(self).$func_name($arg_names)
                 }
             }
@@ -134,11 +150,11 @@ fn gen_method(
         let st_name = cc_st.name;
         let func_name = &func.name;
         let ret_ty = func.return_ty(db);
-        write_gen!(db, cc, "
-            $ret_ty $c_func_name($st_name* self, $args_sig) {
-                return $st_name::$func_name(self, $arg_names);
+        write_gen!(db, cc, r#"
+            extern "C" $ret_ty $c_func_name($st_name* self, $args_sig) {
+                return self->$st_name::$func_name($arg_names);
             }
-        ")?;
+        "#)?;
     }
 
     Ok(())
@@ -309,22 +325,23 @@ mod tests {
                 pub a: i32,
                 pub b: i32,
             }
-            trait Foo_sum_Ext {
+            pub trait Foo_sum_Ext {
                 fn sum(self, c: i32, _1__: i32) -> i32;
             }
             impl Foo_sum_Ext for ::core::ptr::NonNull<Foo> {
                 fn sum(self, c: i32, _1__: i32) -> i32 {
-                    Foo$$sum(self.as_ptr(), c, _1__)
+                    extern "C" { fn _bind_Foo__sum(this: *mut Foo, c: i32, _1__: i32) -> i32; }
+                    unsafe { _bind_Foo__sum(self.as_ptr(), c, _1__) }
                 }
             }
             impl Foo {
-                fn sum(&mut self, c: i32, _1__: i32) -> i32 {
+                pub fn sum(&mut self, c: i32, _1__: i32) -> i32 {
                     ::core::ptr::NonNull::from(self).sum(c, _1__)
                 }
             }
         "#, r#"
-            int Foo$$sum(Foo* self, int c, int _1__) {
-                return Foo::sum(self, c, _1__);
+            extern "C" int _bind_Foo__sum(Foo* self, int c, int _1__) {
+                return self->Foo::sum(c, _1__);
             }
         "#);
     }

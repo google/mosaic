@@ -7,7 +7,7 @@ use crate::{
 };
 use clang::{
     self, source, source::SourceRange, Accessibility, Clang, Entity, EntityKind, EntityVisitResult,
-    Parser, SourceError, TranslationUnit, Type, TypeKind,
+    Parser, TranslationUnit, Type, TypeKind,
 };
 use core::hash::Hasher;
 use std::cell::RefCell;
@@ -20,8 +20,6 @@ use std::sync::Arc;
 mod db;
 use db::with_ast;
 pub(crate) use db::{set_ast, AstMethods, AstMethodsStorage};
-
-pub type Error = SourceError;
 
 struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
 struct InternerInner<T: Hash + Eq, Id> {

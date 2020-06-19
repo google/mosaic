@@ -18,7 +18,7 @@ mod libclang;
 
 use crate::diagnostics::DiagnosticsCtx;
 use salsa;
-use std::{env, io};
+use std::{env, io, path::PathBuf};
 
 pub(crate) use libclang::File;
 
@@ -75,11 +75,24 @@ impl Session {
     }
 }
 
-fn main() -> Result<(), libclang::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     use ir::cc::RsIr;
 
     let mut sess = Session::new();
-    let filename = env::args().nth(1).expect("Usage: cargo run <cc_file>");
+    let filename: PathBuf = env::args().nth(1).expect("Usage: cargo run <cc_file>").into();
+    if !filename.is_file() {
+        eprintln!("Error: input must exist and be a file: {}", filename.to_string_lossy());
+        std::process::exit(1);
+    }
+    let out_dir = filename.parent().unwrap();
+    let out_base= {
+        let mut name = filename.file_stem().unwrap().to_os_string();
+        name.push("_bind");
+        filename.with_file_name(name)
+    };
+
+    let out_rs = tempfile::Builder::new().tempfile_in(out_dir)?;
+    let out_cc = tempfile::Builder::new().tempfile_in(out_dir)?;
 
     let parse = libclang::parse(&sess, &filename.into());
     let diags = &sess.diags;
@@ -87,11 +100,11 @@ fn main() -> Result<(), libclang::Error> {
         let rs_module = db.rs_bindings();
         match rs_module.to_ref().val() {
             Ok(rs_module) => {
-                let out = io::stdout();
-                let mut out = out.lock();
+                let mut rs_writer = io::BufWriter::new(&out_rs);
+                let mut cc_writer = io::BufWriter::new(&out_cc);
                 let outputs = codegen::Outputs {
-                    rs: Some(codegen::CodeWriter::new(&mut out)),
-                    cc: None,
+                    rs: Some(codegen::CodeWriter::new(&mut rs_writer)),
+                    cc: Some(codegen::CodeWriter::new(&mut cc_writer)),
                     hdr: None,
                 };
                 codegen::perform_codegen(db, &rs_module, outputs).expect("Codegen failed");
@@ -99,6 +112,9 @@ fn main() -> Result<(), libclang::Error> {
             Err(errs) => errs.clone().emit(db, diags),
         };
     });
+
+    out_rs.persist(out_base.with_extension("rs"))?;
+    out_cc.persist(out_base.with_extension("cc"))?;
 
     Ok(())
 }

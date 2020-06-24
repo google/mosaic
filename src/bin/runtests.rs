@@ -2,8 +2,8 @@ use std::{
     env,
     error::Error,
     io::{self, Write},
-    path::PathBuf,
-    process::{self, Command},
+    path::{Path, PathBuf},
+    process::{self, Command, Output},
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -43,21 +43,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         print!("test {} ... ", test_name);
         io::stdout().flush().unwrap();
 
-        let mut cmd = Command::new("make");
-        cmd.current_dir(test);
-        let (status, output) = if nocapture {
-            let status = cmd.spawn().expect("failed to run test").wait().unwrap();
-            (status, None)
-        } else {
-            let output = cmd.output().expect("failed to run test");
-            (output.status, Some(output))
-        };
-        if status.success() {
-            println!("ok");
-            passes += 1;
-        } else {
-            println!("failed");
-            failures.push((test_name, output));
+        let result = run_make_test(test.as_path(), nocapture);
+        match result {
+            TestResult::Ok => {
+                println!("ok");
+                passes += 1;
+            }
+            TestResult::Failed(output) => {
+                println!("failed");
+                failures.push((test_name, output));
+            }
         }
     }
 
@@ -99,4 +94,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+enum TestResult {
+    Ok,
+    Failed(Option<Output>),
+}
+
+fn run_make_test(test: &Path, nocapture: bool) -> TestResult {
+    let tmpdir = tempfile::tempdir().expect("Could not create temporary directory");
+
+    let mut cmd = Command::new("make");
+    cmd.current_dir(test).env("TMPDIR", tmpdir.path());
+    let (status, output) = if nocapture {
+        let status = cmd.spawn().expect("failed to run test").wait().unwrap();
+        (status, None)
+    } else {
+        let output = cmd.output().expect("failed to run test");
+        (output.status, Some(output))
+    };
+    if status.success() {
+        TestResult::Ok
+    } else {
+        TestResult::Failed(output)
+    }
 }

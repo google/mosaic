@@ -2,7 +2,7 @@ use crate::{
     diagnostics::{err, ok, Diagnostic, Diagnostics, FileId, Outcome, Span},
     ir::cc::{self, *},
     ir::{DefKind, Module},
-    util::DisplayName,
+    // util::DisplayName,
     Session,
 };
 use clang::{
@@ -181,7 +181,7 @@ fn handle_rust_export<'tu>(
 ) -> Outcome<()> {
     Diagnostics::build(|diags| {
         for decl in ns.get_children() {
-            println!("{:?}", decl);
+            // println!("{:?}", decl);
             let name = Path::from(decl.get_name().unwrap());
             match decl.get_kind() {
                 EntityKind::UsingDeclaration => {
@@ -295,10 +295,10 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         assert_eq!(overloads.len(), 1);
         let ent = overloads[0];
 
-        println!("{} = {:?}", name, ent);
-        for child in ent.get_children() {
-            println!("  {}: {:?}", child.display_name(), child.get_kind());
-        }
+        // println!("{} = {:?}", name, ent);
+        // for child in ent.get_children() {
+        //     println!("  {}: {:?}", child.display_name(), child.get_kind());
+        // }
 
         match ent.get_kind() {
             EntityKind::StructDecl => self
@@ -456,7 +456,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         errs: &mut Diagnostics,
     ) -> bool {
         let ty = method.get_type().unwrap();
-        eprintln!("calling convention: {:?}", ty.get_calling_convention());
+        // eprintln!("calling convention: {:?}", ty.get_calling_convention());
         let mut param_tys = vec![];
         let mut param_names = vec![];
         method.visit_children(|child, _| {

@@ -21,5 +21,8 @@ rental = "0.5.4"
 itertools = "0.9"
 tempfile = "3.1"
 
+# runtests deps
+cc_crate = { package = "cc", version = "1.0" }
+
 [dev-dependencies]
 pretty_assertions = "0.6.1"

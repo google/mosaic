@@ -1,3 +1,4 @@
+use cc_crate as cc;
 use std::{
     env,
     error::Error,
@@ -104,8 +105,26 @@ enum TestResult {
 fn run_make_test(test: &Path, nocapture: bool) -> TestResult {
     let tmpdir = tempfile::tempdir().expect("Could not create temporary directory");
 
+    let cxx = {
+        let mut cfg = cc::Build::new();
+        cfg.cargo_metadata(false).opt_level(0).cpp(true);
+        let triple = if cfg!(unix) {
+            Some(format!("{}-unknown-linux-gnu", env::consts::ARCH))
+        } else if cfg!(windows) {
+            Some(format!("{}-pc-windows-msvc", env::consts::ARCH))
+        } else {
+            None
+        };
+        if let Some(triple) = triple {
+            cfg.target(&triple).host(&triple);
+        }
+        cfg.get_compiler()
+    };
+
     let mut cmd = Command::new("make");
-    cmd.current_dir(test).env("TMPDIR", tmpdir.path());
+    cmd.current_dir(test)
+        .env("TMPDIR", tmpdir.path())
+        .env("CXX", cxx.path());
     let (status, output) = if nocapture {
         let status = cmd.spawn().expect("failed to run test").wait().unwrap();
         (status, None)

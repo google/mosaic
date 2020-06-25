@@ -42,6 +42,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc"
+version = "1.0.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "cfg-if"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -318,6 +323,7 @@ dependencies = [
 name = "peasy"
 version = "0.1.0"
 dependencies = [
+ "cc 1.0.54 (registry+https://github.com/rust-lang/crates.io-index)",
  "clang 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "codespan 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
  "codespan-reporting 0.8.0 (git+https://github.com/tmandry/codespan.git?branch=diagnostic-eq)",
@@ -702,6 +708,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum autocfg 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "f8aac770f1885fd7e387acedd76065302551364496e46b3dd00860b2f8359b9d"
 "checksum bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
 "checksum c2-chacha 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "214238caa1bf3a496ec3392968969cab8549f96ff30652c9e56885329315f6bb"
+"checksum cc 1.0.54 (registry+https://github.com/rust-lang/crates.io-index)" = "7bbb73db36c1246e9034e307d0fba23f9a2e251faa47ade70c1bd252220c8311"
 "checksum cfg-if 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)" = "4785bdd1c96b2a846b2bd7cc02e86b6b3dbf14e7e53446c4f54c92a361040822"
 "checksum clang 0.23.0 (registry+https://github.com/rust-lang/crates.io-index)" = "edaa418fdc81a329f3c8258a4e8776f7d2c31682147c5bda1c5c37ab8e818114"
 "checksum clang-sys 0.28.1 (registry+https://github.com/rust-lang/crates.io-index)" = "81de550971c976f176130da4b2978d3b524eaa0fd9ac31f3ceb5ae1231fb4853"

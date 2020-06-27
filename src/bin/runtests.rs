@@ -105,7 +105,10 @@ enum TestResult {
 fn run_make_test(test: &Path, nocapture: bool) -> TestResult {
     let tmpdir = tempfile::tempdir().expect("Could not create temporary directory");
 
-    let cxx = {
+    let mut cmd = Command::new("make");
+    cmd.current_dir(test).env("TMPDIR", tmpdir.path());
+
+    let compiler = {
         let mut cfg = cc::Build::new();
         cfg.cargo_metadata(false).opt_level(0).cpp(true);
         let triple = if cfg!(unix) {
@@ -120,11 +123,29 @@ fn run_make_test(test: &Path, nocapture: bool) -> TestResult {
         }
         cfg.get_compiler()
     };
+    if cfg!(windows) {
+        let lib_tool = compiler.path().parent().unwrap().join("lib.exe");
+        cmd.env(
+            "CXX",
+            &format!(
+                "'{}' {}",
+                compiler.path().to_str().unwrap(),
+                itertools::join(compiler.args().iter().map(|x| x.to_str().unwrap()), " ")
+            ),
+        )
+        .envs(compiler.env().iter().cloned())
+        .env("IS_WINDOWS", "1")
+        .env("IS_MSVC", "1")
+        .env("LD_LIB_PATH_ENVVAR", "PATH")
+        .env(
+            "MSVC_LIB",
+            &format!("'{}' -nologo", lib_tool.to_str().unwrap()),
+        );
+    } else {
+        cmd.env("CXX", compiler.path())
+            .env("LD_LIB_PATH_ENVVAR", "LD_LIBRARY_PATH");
+    }
 
-    let mut cmd = Command::new("make");
-    cmd.current_dir(test)
-        .env("TMPDIR", tmpdir.path())
-        .env("CXX", cxx.path());
     let (status, output) = if nocapture {
         let status = cmd.spawn().expect("failed to run test").wait().unwrap();
         (status, None)

@@ -377,8 +377,9 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                         self.span(child)
                             .label("this kind of item is not handled yet"),
                     ));
-                    #[cfg(test)]
-                    eprintln!("unhandled child: {:?}", child);
+                    // TODO this crashes on LLVM 10
+                    // #[cfg(test)]
+                    // eprintln!("unhandled child: {:?}", child);
                     true
                 }
             };

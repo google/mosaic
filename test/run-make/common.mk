@@ -1,5 +1,5 @@
 RUSTC   ?= rustc
-TMPDIR  ?= /youneedtosupply/tmpdir
+TMPDIR  ?= $(shell mktemp -d)
 BINDGEN ?= cargo run --bin=peasy --
 
 LD_LIB_PATH_ENVVAR ?= LD_LIBRARY_PATH
@@ -17,5 +17,5 @@ $(TMPDIR)/lib%.o: $(TMPDIR)/%.cc
 
 $(TMPDIR)/%_bind.rs $(TMPDIR)/%_bind.cc: %.h
 	$(BINDGEN) $<
-$(TMPDIR)/%_bind.rlib: $(TMPDIR)/%_bind.rs $(TMPDIR)/lib%_bind.a
+$(TMPDIR)/%_bind.rlib: $(TMPDIR)/%_bind.rs $(call STATICLIB,%_bind)
 	$(RUSTC) --crate-type=lib -lstatic=$(notdir $*)_bind $(EXTRARSCXXFLAGS) $<

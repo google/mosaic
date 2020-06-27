@@ -911,6 +911,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]  // TODO fix on other LLVM versions
     fn nested_struct_alignas() {
         let mut sess = Session::new();
         let ir = cpp_lower!(sess, {

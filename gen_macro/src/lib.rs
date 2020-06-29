@@ -12,7 +12,7 @@ pub trait Gen<Ctx = ()> {
 }
 
 // Indirection for when the macro tries to gen something that's already a reference.
-impl<'a, Ctx, T: Gen<Ctx>> Gen<Ctx> for &'a T {
+impl<'a, Ctx, T: Gen<Ctx> + ?Sized> Gen<Ctx> for &'a T {
     fn gen(&self, ctx: &Ctx, writer: &mut CodeWriter<'_>) -> io::Result<()> {
         <T as Gen<Ctx>>::gen(self, ctx, writer)
     }
@@ -35,9 +35,19 @@ impl From<String> for Snippet {
         Snippet(code.into_bytes())
     }
 }
+impl From<&str> for Snippet {
+    fn from(code: &str) -> Self {
+        Snippet(code.to_owned().into_bytes())
+    }
+}
 impl From<Vec<u8>> for Snippet {
     fn from(code: Vec<u8>) -> Self {
         Snippet(code)
+    }
+}
+impl From<&[u8]> for Snippet {
+    fn from(code: &[u8]) -> Self {
+        Snippet(code.to_owned())
     }
 }
 impl ToString for Snippet {

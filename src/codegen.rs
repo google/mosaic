@@ -16,6 +16,7 @@ pub(crate) struct Outputs<'a> {
     pub hdr: Option<CodeWriter<'a>>,
 }
 
+#[rustfmt::skip::macros(write_gen)]
 pub(crate) fn perform_codegen(
     db: &(impl RsIr + CcIr),
     mdl: &rs::Module,
@@ -27,13 +28,18 @@ pub(crate) fn perform_codegen(
 
     if !skip_header {
         if let Some(rs) = out.rs.as_mut() {
-            writeln!(rs, "#![allow(non_camel_case_types)]")?;
-            writeln!(rs, "extern crate core;")?;
-            writeln!(rs, "")?;
+            write_gen!(db, rs, "
+                #![allow(non_camel_case_types)]
+                extern crate core;
+
+            ")?;
         }
         if let Some(cc) = out.cc.as_mut() {
-            writeln!(cc, "#include \"{}\"", include_path)?;
-            writeln!(cc, "")?;
+            let include_path = Snippet::from(include_path);
+            write_gen!(db, cc, r#"
+                #include "$include_path"
+
+            "#)?;
         }
     }
 
@@ -54,21 +60,29 @@ impl<DB: RsIr> Gen<DB> for rs::Visibility {
     }
 }
 
+#[rustfmt::skip::macros(write_gen)]
 fn gen_struct(db: &(impl RsIr + CcIr), st: &rs::Struct, out: &mut Outputs<'_>) -> io::Result<()> {
     if let Some(rs) = out.rs.as_mut() {
-        writeln!(rs, "#[repr(C, align({}))]", st.align)?;
-        st.vis.gen(db, rs)?;
-        writeln!(rs, "struct {} {{", st.name)?;
+        let rs::Struct {
+            vis, name, align, ..
+        } = st;
+        write_gen!(db, rs, "
+            #[repr(C, align($align))]
+            ${vis}struct $name {
+        ")?;
         rs.with_indent(|rs| -> io::Result<()> {
             for field in &st.fields {
-                field.vis.gen(db, rs)?;
-                write!(rs, "{}: ", field.name)?;
-                field.ty(db).gen(db, rs)?;
-                writeln!(rs, ",")?;
+                let rs::Field { vis, name, .. } = field;
+                let ty = field.ty(db);
+                write_gen!(db, rs, "
+                    ${vis}$name: $ty,
+                ")?;
             }
             Ok(())
         })?;
-        writeln!(rs, "}}")?;
+        write_gen!(db, rs, "
+            }
+        ")?;
     }
 
     for method in &st.methods {
@@ -181,19 +195,19 @@ impl<DB: RsIr> DbRef for &'_ DB {
     }
 }
 
-impl<DB> Gen<DB> for rs::Ident {
-    fn gen(&self, _db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
-        write!(f, "{}", self.as_str())
-    }
-}
-impl<DB> Gen<DB> for rs::Path {
-    fn gen(&self, _db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
-        for token in self.iter().map(rs::Ident::as_str).intersperse("::") {
-            write!(f, "{}", token)?;
+macro_rules! impl_gen_from_display {
+    ($ty:path) => {
+        impl<DB> Gen<DB> for $ty {
+            fn gen(&self, _db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
+                write!(f, "{}", self)
+            }
         }
-        Ok(())
-    }
+    };
 }
+
+impl_gen_from_display!(rs::Align);
+impl_gen_from_display!(rs::Ident);
+impl_gen_from_display!(rs::Path);
 
 impl<DB: RsIr> Gen<DB> for rs::Ty {
     fn gen(&self, db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {

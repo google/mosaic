@@ -10,6 +10,7 @@
 
 use crate::diagnostics::{err, ok, Diagnostic, Outcome, Span};
 use crate::libclang::AstMethods;
+use itertools::Itertools;
 use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroU16;
 use std::{fmt, iter};
@@ -254,14 +255,8 @@ mod common {
     }
     impl fmt::Display for Path {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            let mut iter = self.components.iter();
-            let mut next = iter.next();
-            while let Some(id) = next {
-                write!(f, "{}", id)?;
-                next = iter.next();
-                if next.is_some() {
-                    write!(f, "::")?;
-                }
+            for token in self.iter().map(rs::Ident::as_str).intersperse("::") {
+                write!(f, "{}", token)?;
             }
             Ok(())
         }
@@ -911,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]  // TODO fix on other LLVM versions
+    #[cfg_attr(windows, ignore)] // TODO fix on other LLVM versions
     fn nested_struct_alignas() {
         let mut sess = Session::new();
         let ir = cpp_lower!(sess, {

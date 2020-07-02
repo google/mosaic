@@ -10,16 +10,16 @@ default-run = "peasy"
 gen_macro = { path = "./gen_macro" }
 
 clang = { version = "0.23.0", features = ["clang_8_0"] }
-thiserror = "1.0.9"
 codespan = "0.9.5"
 codespan-reporting = "0.9.5"
-termcolor = "1.1.0"
+itertools = "0.9"
 lazy_static = "1.4.0"
+rental = "0.5.4"
 salsa = "0.14.1"
 structopt = "0.3"
-rental = "0.5.4"
-itertools = "0.9"
 tempfile = "3.1"
+termcolor = "1.1.0"
+thiserror = "1.0.9"
 
 # runtests deps
 cc_crate = { package = "cc", version = "1.0" }

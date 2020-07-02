@@ -9,9 +9,10 @@ use codespan_reporting::term;
 use std::{
     cell::RefCell,
     fmt::{self, Debug},
-    hash::Hash,
+    hash::{Hash, Hasher},
     iter::{FromIterator, IntoIterator},
     rc::Rc,
+    sync::Arc,
 };
 use termcolor::{self, ColorChoice};
 
@@ -283,14 +284,16 @@ impl Diagnostic {
 
 /// An ordered list of diagnostics.
 // TODO: panic if a Diagnostic[s] is dropped without ever being emitted
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug)]
 #[must_use]
 pub struct Diagnostics {
-    val: Vec<Diagnostic>,
+    val: Arc<Vec<Diagnostic>>,
 }
 impl Diagnostics {
     pub fn new() -> Diagnostics {
-        Diagnostics { val: vec![] }
+        Diagnostics {
+            val: Arc::new(vec![]),
+        }
     }
 
     pub fn build(f: impl FnOnce(&mut Diagnostics)) -> Diagnostics {
@@ -301,7 +304,7 @@ impl Diagnostics {
 
     /// Adds a diagnostic.
     pub fn add(&mut self, diag: Diagnostic) {
-        self.val.push(diag);
+        Arc::make_mut(&mut self.val).push(diag);
     }
 
     /// Combines diagnostics from `self` and `second` in order.
@@ -320,17 +323,18 @@ impl Diagnostics {
         // One day we can optimize the data structure for this case, instead of
         // cloning. We'll probably use Arcs, but optimize for the empty case.
         Diagnostics {
-            val: self.val.iter().chain(second.val.iter()).cloned().collect(),
+            val: Arc::new(self.val.iter().chain(second.val.iter()).cloned().collect()),
         }
     }
 
     /// Consumes `other`, adding all diagnostics to `self`.
-    pub fn append(&mut self, mut other: Diagnostics) {
-        self.val.append(&mut other.val);
+    pub fn append(&mut self, other: Diagnostics) {
+        Arc::make_mut(&mut self.val).append(&mut other.into());
     }
 
     pub fn emit(self, db: &impl db::BasicFileCache, ctx: &DiagnosticsCtx) {
-        for diag in self.val {
+        let diags: Vec<_> = self.into();
+        for diag in diags {
             diag.emit(db, ctx);
         }
     }
@@ -339,14 +343,27 @@ impl Diagnostics {
         self.val.iter()
     }
 }
+impl PartialEq for Diagnostics {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.val, &other.val)
+    }
+}
+impl Eq for Diagnostics {}
+impl Hash for Diagnostics {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_usize(self.val.as_slice().as_ptr() as usize);
+    }
+}
 impl From<Diagnostic> for Diagnostics {
     fn from(err: Diagnostic) -> Self {
-        Diagnostics { val: vec![err] }
+        Diagnostics {
+            val: Arc::new(vec![err]),
+        }
     }
 }
 impl From<Diagnostics> for Vec<Diagnostic> {
     fn from(diags: Diagnostics) -> Self {
-        diags.val
+        Arc::try_unwrap(diags.val).unwrap_or_else(|val| Vec::clone(&val))
     }
 }
 

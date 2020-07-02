@@ -18,9 +18,9 @@ use termcolor::{self, ColorChoice};
 
 pub mod db {
     use super::*;
-    use codespan_reporting::files::{Line, SimpleFile};
+    use codespan_reporting::files::SimpleFile;
     use salsa::{self, InternKey};
-    use std::sync::Arc;
+    use std::{ops::Range, sync::Arc};
 
     intern_key!(FileId);
     impl PartialOrd for FileId {
@@ -45,8 +45,8 @@ pub mod db {
     pub struct BasicFile(SimpleFile<Arc<str>, Arc<str>>);
     impl PartialEq for BasicFile {
         fn eq(&self, other: &BasicFile) -> bool {
-            Arc::ptr_eq(self.0.origin(), other.0.origin())
-                && Arc::ptr_eq(self.0.source(), other.0.source())
+            Arc::ptr_eq(self.0.source(), other.0.source())
+                && Arc::ptr_eq(self.0.name(), other.0.name())
         }
     }
     impl Eq for BasicFile {}
@@ -65,19 +65,19 @@ pub mod db {
     pub(super) struct FilesWrapper<'db, DB: BasicFileCache>(pub(super) &'db DB);
     impl<'a, DB: BasicFileCache> codespan_reporting::files::Files<'a> for FilesWrapper<'a, DB> {
         type FileId = FileId;
-        type Origin = Arc<str>;
-        type LineSource = String;
+        type Source = Arc<str>;
+        type Name = Arc<str>;
 
-        fn origin(&self, id: FileId) -> Option<Self::Origin> {
-            Some(self.0.basic_file(id).0.origin().clone())
+        fn name(&self, id: FileId) -> Option<Self::Name> {
+            Some(self.0.basic_file(id).0.name().clone())
         }
 
-        fn line(&self, id: FileId, line_idx: usize) -> Option<Line<String>> {
-            self.0.basic_file(id).0.line((), line_idx).map(|line| Line {
-                start: line.start,
-                number: line.number,
-                source: line.source.to_owned(),
-            })
+        fn source(&self, id: FileId) -> Option<Self::Source> {
+            Some(self.0.basic_file(id).0.source().clone())
+        }
+
+        fn line_range(&self, id: FileId, line_idx: usize) -> Option<Range<usize>> {
+            self.0.basic_file(id).0.line_range((), line_idx)
         }
 
         fn line_index(&self, id: FileId, byte_idx: usize) -> Option<usize> {
@@ -186,7 +186,7 @@ impl DiagnosticsCtx {
 }
 
 #[must_use]
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct Diagnostic(imp::Diagnostic<db::FileId>);
 
 impl fmt::Debug for Diagnostic {

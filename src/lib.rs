@@ -10,6 +10,7 @@ mod util;
 #[macro_use]
 extern crate rental;
 
+mod cc_use;
 mod codegen;
 mod diagnostics;
 mod index;
@@ -25,6 +26,7 @@ use std::{
 };
 use structopt::StructOpt;
 
+use io::Write;
 pub(crate) use libclang::File;
 
 #[salsa::database(
@@ -118,35 +120,21 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
         .ok_or("Input filename must be valid UTF-8")?
         .to_owned();
 
+    // If the input is a Rust file, parse it for cc_use! macros and then parse the header files it
+    // points to. Otherwise, parse the input file directly as C++.
+    let mut sess = Session::new();
+    let index = libclang::create_index();
+    let cc_modules = if let Some("rs") = input_path.extension().and_then(|p| p.to_str()) {
+        let (modules, errs) = cc_use::process_rs_input(&sess, &index, &input_path)?.split();
+        errs.emit(&sess.db, &sess.diags);
+        modules
+    } else {
+        vec![libclang::parse(&sess, &index, &input_path)]
+    };
+
     let out_rs = tempfile::Builder::new().tempfile_in(out_dir)?;
     let out_cc = tempfile::Builder::new().tempfile_in(out_dir)?;
-
-    let mut sess = Session::new();
-    let parse = libclang::parse(&sess, &input_path.into());
-    let diags = &sess.diags;
-    let success = libclang::set_ast(&mut sess.db, vec![parse], |db| {
-        use ir::cc::RsIr;
-        let rs_module = db.rs_bindings();
-        match rs_module.to_ref().val() {
-            Ok(rs_module) => {
-                let mut rs_writer = io::BufWriter::new(&out_rs);
-                let mut cc_writer = io::BufWriter::new(&out_cc);
-                let outputs = codegen::Outputs {
-                    rs: Some(codegen::CodeWriter::new(&mut rs_writer)),
-                    cc: Some(codegen::CodeWriter::new(&mut cc_writer)),
-                    hdr: None,
-                };
-                codegen::perform_codegen(db, &rs_module, &include_path, false, outputs)
-                    .expect("Codegen failed");
-                true
-            }
-            Err(errs) => {
-                errs.clone().emit(db, diags);
-                false
-            }
-        }
-    });
-
+    let success = run_generator(&mut sess, cc_modules, &include_path, &out_rs, &out_cc);
     if !success {
         return Ok(101);
     }
@@ -154,4 +142,34 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
     out_cc.persist(out_base.with_extension("cc"))?;
 
     Ok(0)
+}
+
+fn run_generator(
+    sess: &mut Session,
+    cc_modules: Vec<libclang::ModuleContext>,
+    include_path: &str,
+    out_rs: impl Write,
+    out_cc: impl Write,
+) -> bool {
+    let mut rs_writer = io::BufWriter::new(out_rs);
+    let mut cc_writer = io::BufWriter::new(out_cc);
+    let outputs = codegen::Outputs {
+        rs: Some(codegen::CodeWriter::new(&mut rs_writer)),
+        cc: Some(codegen::CodeWriter::new(&mut cc_writer)),
+        hdr: None,
+    };
+
+    let diags = &sess.diags;
+    libclang::set_ast(&mut sess.db, cc_modules, |db| {
+        use ir::cc::RsIr;
+        let rs_module = db.rs_bindings();
+        let (rs_module, errs) = rs_module.to_ref().split();
+        errs.clone().emit(db, diags);
+        if diags.has_errors() {
+            return false;
+        }
+        codegen::perform_codegen(db, &rs_module, &include_path, false, outputs)
+            .expect("Codegen failed");
+        true
+    })
 }

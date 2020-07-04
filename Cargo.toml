@@ -21,6 +21,10 @@ tempfile = "3.1"
 termcolor = "1.1.0"
 thiserror = "1.0.9"
 
+# cc_use deps
+syn = { version = "1.0", features = ["full", "parsing"] }
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+
 # runtests deps
 cc_crate = { package = "cc", version = "1.0" }
 

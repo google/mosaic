@@ -339,6 +339,10 @@ impl Diagnostics {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.val.is_empty()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
         self.val.iter()
     }

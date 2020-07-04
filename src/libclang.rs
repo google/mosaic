@@ -14,11 +14,12 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::hash::Hash;
-use std::path::PathBuf;
+use std::path;
 use std::sync::Arc;
 
 mod db;
-pub(crate) use db::{set_ast, AstMethods, AstMethodsStorage};
+pub(crate) use clang::SourceError;
+pub(crate) use db::{set_ast, AstMethods, AstMethodsStorage, Index, ModuleContext};
 
 struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
 struct InternerInner<T: Hash + Eq, Id> {
@@ -98,21 +99,27 @@ impl<'tu> ModuleContextInner<'tu> {
     }
 }
 
-pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::ModuleContext {
-    let clang = Arc::new(Clang::new().unwrap());
-    parse_with(clang, sess, |index| {
+pub(crate) fn create_index() -> Index {
+    create_index_with(Arc::new(Clang::new().unwrap()))
+}
+
+pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
+    db::Index::new(clang, false, false)
+}
+
+pub(crate) fn parse(sess: &Session, index: &Index, filename: &path::Path) -> ModuleContext {
+    parse_with(sess, index, |index| {
         let parser = index.parser(filename);
         configure(parser).parse().unwrap()
     })
 }
 
 pub(crate) fn parse_with(
-    clang: Arc<Clang>,
     _sess: &Session,
+    index: &Index,
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
 ) -> db::ModuleContext {
-    let index = db::Index::new(clang, false, false);
-    let tu = index.parse_with(parse_fn);
+    let tu = index.clone().parse_with(parse_fn);
     db::ModuleContext::new(tu)
 }
 
@@ -123,6 +130,12 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
         "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
     ]);
     parser
+}
+
+impl From<clang::SourceError> for Diagnostics {
+    fn from(_: clang::SourceError) -> Self {
+        todo!()
+    }
 }
 
 fn lower_ast(db: &impl db::AstMethods, mdl: ModuleId) -> Outcome<Module> {

@@ -54,12 +54,12 @@ impl<'tu> Node<'tu> {
 }
 
 /// A lazily populated index for looking up `Node`s by name.
-pub struct Index<'tu> {
+pub struct PathIndex<'tu> {
     nodes: Vec<Node<'tu>>,
 }
-impl<'tu> Index<'tu> {
+impl<'tu> PathIndex<'tu> {
     /// Creates an index from the given TranslationUnit.
-    pub fn new(file: &'tu clang::TranslationUnit<'_>) -> Index<'tu> {
+    pub fn new(file: &'tu clang::TranslationUnit<'_>) -> PathIndex<'tu> {
         let entity = file.get_entity();
         let file_node = Node {
             //kind: entity.get_kind(),
@@ -67,7 +67,7 @@ impl<'tu> Index<'tu> {
             items: None,
             inline_items: vec![],
         };
-        Index {
+        PathIndex {
             nodes: vec![file_node],
         }
     }
@@ -211,7 +211,7 @@ mod tests {
                 }
             }
         });
-        let mut index = Index::new(&file);
+        let mut index = PathIndex::new(&file);
         assert!(index.lookup(&Path::from("std::__1::vector")).is_ok());
         assert!(index.lookup(&Path::from("std::vector")).is_ok());
         assert!(index.lookup(&Path::from("std::notinline::foo")).is_ok());

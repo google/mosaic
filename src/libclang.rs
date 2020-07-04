@@ -19,6 +19,8 @@ use std::path;
 use std::sync::Arc;
 
 mod db;
+mod index;
+
 pub(crate) use clang::SourceError;
 pub(crate) use db::{set_ast, AstMethods, AstMethodsStorage, Index, ModuleContext};
 

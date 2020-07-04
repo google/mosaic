@@ -13,7 +13,6 @@ extern crate rental;
 mod cc_use;
 mod codegen;
 mod diagnostics;
-mod index;
 mod ir;
 mod libclang;
 

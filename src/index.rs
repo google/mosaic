@@ -186,7 +186,7 @@ fn should_expand(ent: Entity<'_>) -> bool {
 fn should_inline(ent: Entity<'_>) -> bool {
     use EntityKind::*;
     match ent.get_kind() {
-        Namespace => false,
+        Namespace => ent.is_inline_namespace(),
         EnumDecl => !ent.is_scoped(),
         _ => false,
     }
@@ -213,6 +213,7 @@ mod tests {
         });
         let mut index = Index::new(&file);
         assert!(index.lookup(&Path::from("std::__1::vector")).is_ok());
+        assert!(index.lookup(&Path::from("std::vector")).is_ok());
         assert!(index.lookup(&Path::from("std::notinline::foo")).is_ok());
         assert!(index.lookup(&Path::from("std::foo")).is_err());
     }

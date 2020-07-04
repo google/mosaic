@@ -484,6 +484,7 @@ pub mod cc {
                         .contains(&id.clone().into())
                 }),
                 _ if self.is_builtin() => true,
+                Ty::Error => false,
                 _ => unreachable!(),
             }
         }
@@ -760,7 +761,7 @@ pub mod rs {
             match self {
                 Ty::Struct(id) => id.lookup(db).align,
                 // TODO make target dependent. this assumes x86_64
-                _ => Align::new(self.size(db).0),
+                _ => Align::new(std::cmp::max(1, self.size(db).0)),
             }
         }
     }
@@ -925,7 +926,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)] // TODO fix on other LLVM versions
     fn nested_struct_alignas() {
         let mut sess = Session::new();
         let ir = cpp_lower!(sess, {
@@ -939,9 +939,7 @@ mod tests {
             namespace rust_export {
                 using ::Bar;
             }
-        } => [
-            "unknown attribute"  // warning
-        ]);
+        });
         let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
         assert_eq!(rs::Size::new(16), st.size);
         assert_eq!(rs::Align::new(8), st.align);

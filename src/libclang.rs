@@ -383,6 +383,10 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                     self.lower_field(child, &mut fields, &mut offsets, &mut errs)
                 }
                 EntityKind::Method => self.lower_method(child, &mut methods, &mut errs),
+                EntityKind::AlignedAttr => {
+                    // Nothing to do, we get the alignment directly from libclang.
+                    true
+                }
                 EntityKind::PackedAttr => {
                     errs.add(Diagnostic::error(
                         "packed structs not supported",
@@ -403,9 +407,8 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                         self.span(child)
                             .label("this kind of item is not handled yet"),
                     ));
-                    // TODO this crashes on LLVM 10
-                    // #[cfg(test)]
-                    // eprintln!("unhandled child: {:?}", child);
+                    #[cfg(test)]
+                    eprintln!("unhandled child: {:?}", child);
                     true
                 }
             };

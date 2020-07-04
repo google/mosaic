@@ -1,5 +1,5 @@
 use crate::{
-    diagnostics::{Diagnostic, Diagnostics, Outcome},
+    diagnostics::{Diagnostics, Outcome},
     libclang, Session,
 };
 use proc_macro2::Span;
@@ -20,7 +20,9 @@ const MACRO_NAME: &'static str = "cc_use";
 
 struct CcUse {
     header: Header,
+    #[allow(unused)]
     lib_name: Option<LibName>,
+    #[allow(unused)]
     cc_paths: Vec<CcPath>,
 }
 

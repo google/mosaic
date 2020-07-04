@@ -74,7 +74,7 @@ pub(crate) fn parse_and_lower(
     assert!(!sess.diags.has_errors()); // TODO has_diags()
 
     let ast = libclang::parse_with(CLANG.clone(), &sess, |index| parse(index, src));
-    let (rust_ir, errs) = libclang::set_ast(&mut sess.db, ast, |db| {
+    let (rust_ir, errs) = libclang::set_ast(&mut sess.db, vec![ast], |db| {
         let rs_ir = db.rs_bindings();
         let (mdl, errs) = rs_ir.to_ref().split();
         (mdl.clone(), errs.clone())

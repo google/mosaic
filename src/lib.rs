@@ -124,7 +124,7 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
     let mut sess = Session::new();
     let parse = libclang::parse(&sess, &input_path.into());
     let diags = &sess.diags;
-    let success = libclang::set_ast(&mut sess.db, parse, |db| {
+    let success = libclang::set_ast(&mut sess.db, vec![parse], |db| {
         use ir::cc::RsIr;
         let rs_module = db.rs_bindings();
         match rs_module.to_ref().val() {

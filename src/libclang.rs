@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod db;
-use db::with_ast;
 pub(crate) use db::{set_ast, AstMethods, AstMethodsStorage};
 
 struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
@@ -50,17 +49,26 @@ impl<T: Hash + Eq + Clone, Id: salsa::InternKey + Copy> Interner<T, Id> {
     }
 }
 
+intern_key!(ModuleId);
+intern_key!(LocalFileId);
 intern_key!(EntityId);
 intern_key!(ExportId);
 intern_key!(TypeId);
 
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub struct SourceFile {
+    module: ModuleId,
+    file: LocalFileId,
+}
+
+/// Context for a given translation unit, used to resolve queries.
 #[allow(dead_code)]
-struct AstContextInner<'tu> {
+struct ModuleContextInner<'tu> {
     root: clang::Entity<'tu>,
     // TODO do something with these (and we don't have to store them)
     diagnostics: Vec<clang::diagnostic::Diagnostic<'tu>>,
 
-    files: Interner<source::File<'tu>, FileId>,
+    files: Interner<source::File<'tu>, LocalFileId>,
     entities: Interner<Entity<'tu>, EntityId>,
     exports: Interner<(Path, Export<'tu>), ExportId>,
 
@@ -69,9 +77,9 @@ struct AstContextInner<'tu> {
     types: Interner<HashType<'tu>, TypeId>,
 }
 
-impl<'tu> AstContextInner<'tu> {
+impl<'tu> ModuleContextInner<'tu> {
     pub fn new(tu: &'tu TranslationUnit<'tu>) -> Self {
-        AstContextInner {
+        ModuleContextInner {
             root: tu.get_entity(),
             diagnostics: tu.get_diagnostics(),
 
@@ -85,12 +93,12 @@ impl<'tu> AstContextInner<'tu> {
         }
     }
 
-    fn mk_type_ref(&self, ty: clang::Type<'tu>) -> cc::TypeRef {
-        cc::TypeRef::new(self.types.intern(HashType(ty)))
+    fn mk_type_ref(&self, mdl: ModuleId, ty: clang::Type<'tu>) -> cc::TypeRef {
+        cc::TypeRef::new(mdl, self.types.intern(HashType(ty)))
     }
 }
 
-pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::AstContext {
+pub(crate) fn parse(sess: &Session, filename: &PathBuf) -> db::ModuleContext {
     let clang = Arc::new(Clang::new().unwrap());
     parse_with(clang, sess, |index| {
         let parser = index.parser(filename);
@@ -102,10 +110,10 @@ pub(crate) fn parse_with(
     clang: Arc<Clang>,
     _sess: &Session,
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
-) -> db::AstContext {
+) -> db::ModuleContext {
     let index = db::Index::new(clang, false, false);
     let tu = index.parse_with(parse_fn);
-    db::AstContext::new(tu)
+    db::ModuleContext::new(tu)
 }
 
 pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
@@ -117,24 +125,25 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
     parser
 }
 
-fn lower_ast(db: &impl db::AstMethods) -> Outcome<Module> {
-    with_ast(db, |tu, ast| -> Outcome<Module> {
-        let exports = get_exports(ast, tu);
-        exports.then(|exports| LowerCtx::new(db, ast).lower(&exports))
+fn lower_ast(db: &impl db::AstMethods, mdl: ModuleId) -> Outcome<Module> {
+    db::with_ast_module(db, mdl, |tu, ast| -> Outcome<Module> {
+        let exports = get_exports(db, mdl, ast, tu);
+        exports.then(|exports| LowerCtx::new(db, mdl, ast).lower(&exports))
     })
 }
 
-fn lower_ty(db: &impl db::AstMethods, ty: TypeId) -> Outcome<cc::Ty> {
-    with_ast(db, |_tu, ast| -> Outcome<cc::Ty> {
-        ast.types.lookup(ty).0.lower(&LowerCtx::new(db, ast))
+fn lower_ty(db: &impl db::AstMethods, mdl: ModuleId, ty: TypeId) -> Outcome<cc::Ty> {
+    db::with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
+        ast.types.lookup(ty).0.lower(&LowerCtx::new(db, mdl, ast))
     })
 }
 
 pub(crate) struct File;
 impl File {
     pub(crate) fn get_name_and_contents(db: &impl db::AstMethods, id: FileId) -> (String, String) {
-        with_ast(db, |_, ctx| {
-            let file = ctx.files.lookup(id);
+        let source = db.lookup_intern_source_file(id);
+        db::with_ast_module(db, source.module, |_, ctx| {
+            let file = ctx.files.lookup(source.file);
             (
                 file.get_path().as_path().to_string_lossy().into(),
                 file.get_contents().unwrap_or_default(),
@@ -159,7 +168,9 @@ impl<'tu> Hash for HashType<'tu> {
 }
 
 fn get_exports<'tu>(
-    ast: &AstContextInner<'tu>,
+    db: &impl AstMethods,
+    mdl: ModuleId,
+    ast: &ModuleContextInner<'tu>,
     tu: &'tu TranslationUnit<'tu>,
 ) -> Outcome<Vec<(Path, Export<'tu>)>> {
     let mut outcome = ok(());
@@ -167,7 +178,7 @@ fn get_exports<'tu>(
     for ent in tu.get_entity().get_children() {
         if let EntityKind::Namespace = ent.get_kind() {
             if let Some("rust_export") = ent.get_name().as_deref() {
-                outcome = outcome.then(|_| handle_rust_export(ast, ent, &mut exports));
+                outcome = outcome.then(|_| handle_rust_export(db, mdl, ast, ent, &mut exports));
             }
         }
     }
@@ -175,7 +186,9 @@ fn get_exports<'tu>(
 }
 
 fn handle_rust_export<'tu>(
-    ast: &AstContextInner<'tu>,
+    db: &impl AstMethods,
+    mdl: ModuleId,
+    ast: &ModuleContextInner<'tu>,
     ns: Entity<'tu>,
     exports: &mut Vec<(Path, Export<'tu>)>,
 ) -> Outcome<()> {
@@ -196,7 +209,7 @@ fn handle_rust_export<'tu>(
                 }
                 _ => diags.add(Diagnostic::error(
                     "invalid rust_export item",
-                    span(ast, decl).label("only using declarations are allowed here"),
+                    span(db, mdl, ast, decl).label("only using declarations are allowed here"),
                 )),
             }
         }
@@ -206,14 +219,16 @@ fn handle_rust_export<'tu>(
 
 struct LowerCtx<'ctx, 'tu, DB: db::AstMethods> {
     db: &'ctx DB,
-    ast: &'ctx AstContextInner<'tu>,
+    mdl: ModuleId,
+    ast: &'ctx ModuleContextInner<'tu>,
     //visible: Vec<(Path, Entity<'tu>)>,
 }
 
 impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
-    fn new(db: &'ctx DB, ast: &'ctx AstContextInner<'tu>) -> Self {
+    fn new(db: &'ctx DB, mdl: ModuleId, ast: &'ctx ModuleContextInner<'tu>) -> Self {
         LowerCtx {
             db,
+            mdl,
             ast,
             //visible: vec![],
         }
@@ -426,7 +441,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             // TODO report an error here
             None => return true,
         };
-        let ty = self.ast.mk_type_ref(field.get_type().unwrap());
+        let ty = self.mk_type_ref(field.get_type().unwrap());
         fields.push(Field {
             name: Ident::from(field_name),
             ty,
@@ -464,7 +479,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             match child.get_kind() {
                 EntityKind::ParmDecl => {
                     param_names.push(child.get_name().map(Ident::from));
-                    param_tys.push(self.ast.mk_type_ref(child.get_type().unwrap()));
+                    param_tys.push(self.mk_type_ref(child.get_type().unwrap()));
                 }
                 _ => {
                     errs.add(Diagnostic::bug(
@@ -480,24 +495,35 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             name: method.get_name().unwrap().into(),
             param_tys,
             param_names,
-            return_ty: self.ast.mk_type_ref(ty.get_result_type().unwrap()),
+            return_ty: self.mk_type_ref(ty.get_result_type().unwrap()),
             is_method: !method.is_static_method(),
             is_const: method.is_const_method(),
         });
         true
     }
 
+    fn mk_type_ref(&self, ty: clang::Type<'tu>) -> TypeRef {
+        self.ast.mk_type_ref(self.mdl, ty)
+    }
+
     fn span(&self, ent: Entity<'tu>) -> Span {
-        span(self.ast, ent)
+        span(self.db, self.mdl, self.ast, ent)
     }
 }
 
-fn span<'tu>(ast: &AstContextInner<'tu>, ent: Entity<'tu>) -> Span {
-    maybe_span_from_range(ast, ent.get_range()).expect("TODO dummy span")
+fn span<'tu>(
+    db: &impl AstMethods,
+    mdl: ModuleId,
+    ast: &ModuleContextInner<'tu>,
+    ent: Entity<'tu>,
+) -> Span {
+    maybe_span_from_range(db, mdl, ast, ent.get_range()).expect("TODO dummy span")
 }
 
 fn maybe_span_from_range<'tu>(
-    ast: &AstContextInner<'tu>,
+    db: &impl AstMethods,
+    module: ModuleId,
+    ast: &ModuleContextInner<'tu>,
     range: Option<SourceRange<'tu>>,
 ) -> Option<Span> {
     let range = match range {
@@ -513,7 +539,15 @@ fn maybe_span_from_range<'tu>(
         _ => return None,
     };
     let file_id = ast.files.intern(file);
-    Some(Span::new(file_id, start.offset, end.offset))
+    let source = SourceFile {
+        module,
+        file: file_id,
+    };
+    Some(Span::new(
+        db.intern_source_file(source),
+        start.offset,
+        end.offset,
+    ))
 }
 
 trait Lower<'ctx, 'tu> {

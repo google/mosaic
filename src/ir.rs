@@ -304,13 +304,13 @@ mod common {
     }
 
     #[derive(Clone, Debug, Hash, Eq, PartialEq)]
-    pub struct TypeRef(libclang::TypeId);
+    pub struct TypeRef(libclang::ModuleId, libclang::TypeId);
     impl TypeRef {
-        pub(crate) fn new(id: libclang::TypeId) -> Self {
-            TypeRef(id)
+        pub(crate) fn new(mdl: libclang::ModuleId, id: libclang::TypeId) -> Self {
+            TypeRef(mdl, id)
         }
         pub fn as_cc(&self, db: &impl AstMethods) -> Outcome<cc::Ty> {
-            db.type_of(self.0)
+            db.type_of(self.0, self.1)
         }
         pub fn as_rs(&self, db: &impl cc::RsIr) -> Outcome<rs::Ty> {
             db.rs_type_of(self.clone())
@@ -321,7 +321,7 @@ mod common {
 /// C++ intermediate representation.
 pub mod cc {
     use super::*;
-    use crate::libclang::AstMethods;
+    use crate::{diagnostics::Diagnostics, libclang::AstMethods};
     use std::sync::Arc;
 
     pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
@@ -349,11 +349,20 @@ pub mod cc {
     }
 
     fn rs_bindings(db: &(impl AstMethods + RsIr + IrMethods)) -> Arc<Outcome<rs::Module>> {
-        Arc::new(
-            db.cc_ir_from_src()
+        // For now we combine bindings from all cc modules into a single rs module.
+        // They should be separated at some point.
+        let mut diags = Diagnostics::new();
+        let mut module = rs::Module::default();
+        for id in db.cc_module_ids() {
+            let (mdl, errs) = db
+                .cc_ir_from_src(id)
                 .to_ref()
-                .then(|ir| ir.to_rs_bindings(db)),
-        )
+                .then(|ir| ir.to_rs_bindings(db))
+                .split();
+            module.append(mdl);
+            diags.append(errs);
+        }
+        Arc::new(Outcome::from_parts(module, diags))
     }
 
     fn rs_struct_from_cc(db: &(impl AstMethods + RsIr), id: cc::StructId) -> Outcome<rs::StructId> {
@@ -467,12 +476,13 @@ pub mod cc {
 
         pub fn is_visible(&self, db: &impl AstMethods) -> bool {
             match self {
-                Ty::Struct(id) => db
-                    .cc_ir_from_src()
-                    .to_ref()
-                    .skip_errs()
-                    .exports
-                    .contains(&id.clone().into()),
+                Ty::Struct(id) => db.cc_module_ids().into_iter().any(|mdl| {
+                    db.cc_ir_from_src(mdl)
+                        .to_ref()
+                        .skip_errs()
+                        .exports
+                        .contains(&id.clone().into())
+                }),
                 _ if self.is_builtin() => true,
                 _ => unreachable!(),
             }
@@ -573,8 +583,15 @@ pub mod cc {
                         })
                 })
                 .collect::<Outcome<Vec<_>>>();
-            let mdl = db.cc_ir_from_src();
-            let mdl = mdl.to_ref().skip_errs();
+            let vis = match db
+                .cc_module_ids()
+                .into_iter()
+                .map(|mdl_id| db.cc_ir_from_src(mdl_id))
+                .any(|mdl| mdl.to_ref().skip_errs().exports.contains(&id.into()))
+            {
+                true => rs::Visibility::Public,
+                false => rs::Visibility::Private,
+            };
             ok(())
                 .then(|()| {
                     // Check method types.
@@ -592,10 +609,7 @@ pub mod cc {
                     fields,
                     offsets: self.offsets.clone(),
                     methods: self.methods.iter().cloned().map(rs::Method).collect(),
-                    vis: match mdl.exports.contains(&id.into()) {
-                        true => rs::Visibility::Public,
-                        false => rs::Visibility::Private,
-                    },
+                    vis,
                     repr: rs::Repr::C,
                     size: self.size,
                     align: self.align,
@@ -679,7 +693,7 @@ pub mod rs {
         Struct(StructId),
     }
 
-    #[derive(Debug, Clone, Eq, PartialEq)]
+    #[derive(Debug, Clone, Eq, PartialEq, Default)]
     pub struct Module {
         pub items: Vec<ItemKind>,
         pub exports: HashSet<ItemKind>,
@@ -690,6 +704,11 @@ pub mod rs {
             self.exports.iter().flat_map(|item| match item {
                 ItemKind::Struct(id) => Some(*id),
             })
+        }
+
+        pub fn append(&mut self, mut other: Module) {
+            self.items.append(&mut other.items);
+            self.exports.extend(other.exports.iter().cloned());
         }
     }
 

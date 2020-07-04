@@ -1,5 +1,10 @@
-use super::{AstContextInner, TypeId};
-use crate::{diagnostics::Outcome, ir};
+//! Adapts the libclang types for storage alongside the salsa database.
+
+use super::{ModuleContextInner, ModuleId, SourceFile, TypeId};
+use crate::{
+    diagnostics::{self, Outcome},
+    ir,
+};
 use clang::TranslationUnit;
 use core::cell::RefCell;
 use std::cmp::{Eq, PartialEq};
@@ -12,10 +17,14 @@ pub trait AstMethods {
     #[salsa::dependencies]
     fn ast_context(&self) -> ();
 
-    fn cc_ir_from_src(&self) -> Arc<Outcome<ir::Module>>;
+    fn cc_module_ids(&self) -> Vec<ModuleId>;
+    fn cc_ir_from_src(&self, mdl: ModuleId) -> Arc<Outcome<ir::Module>>;
+
+    #[salsa::interned]
+    fn intern_source_file(&self, file: SourceFile) -> diagnostics::FileId;
 
     #[salsa::invoke(crate::libclang::lower_ty)]
-    fn type_of(&self, id: TypeId) -> Outcome<ir::cc::Ty>;
+    fn type_of(&self, mdl: ModuleId, id: TypeId) -> Outcome<ir::cc::Ty>;
 
     #[salsa::interned]
     fn intern_cc_struct(&self, st: ir::cc::Struct) -> ir::cc::StructId;
@@ -29,18 +38,18 @@ fn ast_context(db: &(impl AstMethods + salsa::Database)) {
         .report_synthetic_read(salsa::Durability::LOW);
 }
 
-fn cc_ir_from_src(db: &impl AstMethods) -> Arc<Outcome<ir::Module>> {
-    Arc::new(super::lower_ast(db))
+fn cc_ir_from_src(db: &impl AstMethods, mdl: ModuleId) -> Arc<Outcome<ir::Module>> {
+    Arc::new(super::lower_ast(db, mdl))
 }
 
 thread_local! {
     // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
-    static AST_CONTEXT: RefCell<Option<AstContext>> = RefCell::new(None);
+    static AST_CONTEXT: RefCell<Option<Vec<ModuleContext>>> = RefCell::new(None);
 }
 
 pub(crate) fn set_ast<R>(
     db: &mut crate::Database,
-    ctx: AstContext,
+    ctx: Vec<ModuleContext>,
     f: impl FnOnce(&crate::Database) -> R,
 ) -> R {
     use salsa::Database;
@@ -51,17 +60,28 @@ pub(crate) fn set_ast<R>(
     res
 }
 
-pub(super) fn with_ast<R>(
-    db: &impl AstMethods,
-    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ AstContextInner<'tu>) -> R,
-) -> R {
+fn cc_module_ids(db: &impl AstMethods) -> Vec<ModuleId> {
     // Report that we're reading the ast context.
     db.ast_context();
     AST_CONTEXT.with(|ctx| {
+        (0..ctx.borrow().as_ref().unwrap().len())
+            .map(|id| ModuleId::new(id as u32))
+            .collect()
+    })
+}
+
+pub(super) fn with_ast_module<R>(
+    db: &impl AstMethods,
+    mdl: ModuleId,
+    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ ModuleContextInner<'tu>) -> R,
+) -> R {
+    // Report that we're reading the ast context.
+    db.ast_context();
+    AST_CONTEXT.with(move |ctx| {
         ctx.borrow_mut()
             .as_mut()
-            .expect("with_ast called with no ast defined")
-            .with(f)
+            .expect("with_ast_module called with no ast defined")[mdl.0.as_usize()]
+        .with(f)
     })
 }
 
@@ -100,24 +120,24 @@ rental! {
         }
 
         #[rental]
-        pub(super) struct AstContext {
+        pub(super) struct ModuleContext {
             #[subrental = 3]
             tu: Arc<Tu>,
-            result: AstContextInner<'tu_2>,
+            result: ModuleContextInner<'tu_2>,
         }
     }
 }
 
-pub struct AstContext(rent::AstContext);
-impl AstContext {
+pub struct ModuleContext(rent::ModuleContext);
+impl ModuleContext {
     pub fn new(tu: AstTu) -> Self {
-        AstContext(rent::AstContext::new(tu.0, |tu| {
-            super::AstContextInner::new(tu.tu)
+        ModuleContext(rent::ModuleContext::new(tu.0, |tu| {
+            super::ModuleContextInner::new(tu.tu)
         }))
     }
     pub(super) fn with<R>(
         &mut self,
-        f: impl for<'tu> FnOnce(&'tu clang::TranslationUnit<'tu>, &super::AstContextInner<'tu>) -> R,
+        f: impl for<'tu> FnOnce(&'tu clang::TranslationUnit<'tu>, &super::ModuleContextInner<'tu>) -> R,
     ) -> R {
         self.0.rent_all(|r| f(r.tu.tu, r.result))
     }

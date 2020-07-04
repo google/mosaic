@@ -36,6 +36,22 @@ pub mod db {
         }
     }
 
+    #[salsa::query_group(SourceFileInternerStorage)]
+    pub trait SourceFileInterner {
+        #[salsa::interned]
+        fn intern_source_file(&self, file: crate::SourceFileKind) -> FileId;
+    }
+
+    /// Cache for [`BasicFile`]. Should not be used outside of the `diagnostics` module.
+    #[salsa::query_group(BasicFileCacheStorage)]
+    pub trait BasicFileCache: SourceFileInterner + crate::SourceFileLookup {
+        fn basic_file(&self, id: FileId) -> Arc<BasicFile>;
+    }
+    fn basic_file(db: &impl BasicFileCache, id: FileId) -> Arc<BasicFile> {
+        let (name, contents) = db.lookup_intern_source_file(id).get_name_and_contents(db);
+        Arc::new(BasicFile(SimpleFile::new(name.into(), contents.into())))
+    }
+
     /// Since the Files trait (and libclang) copy the entire file contents every
     /// time we request them, we need a way of caching those contents. Once cached,
     /// we wrap them in SimpleFile, which creates an index of the start of every
@@ -50,16 +66,6 @@ pub mod db {
         }
     }
     impl Eq for BasicFile {}
-
-    /// Cache for [`BasicFile`]. Should not be used outside of the `diagnostics` module.
-    #[salsa::query_group(BasicFileCacheStorage)]
-    pub trait BasicFileCache: crate::FileInterner {
-        fn basic_file(&self, id: FileId) -> Arc<BasicFile>;
-    }
-    fn basic_file(db: &impl crate::FileInterner, id: FileId) -> Arc<BasicFile> {
-        let (name, contents) = crate::File::get_name_and_contents(db, id);
-        Arc::new(BasicFile(SimpleFile::new(name.into(), contents.into())))
-    }
 
     /// Adapter between salsa, BasicFile, and the Files trait.
     pub(super) struct FilesWrapper<'db, DB: BasicFileCache>(pub(super) &'db DB);

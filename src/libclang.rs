@@ -1,9 +1,10 @@
 use crate::{
-    diagnostics::{err, ok, Diagnostic, Diagnostics, FileId, Outcome, Span},
+    diagnostics::{err, ok, Diagnostic, Diagnostics, Outcome, Span},
     ir::cc::{self, *},
     ir::{DefKind, Module},
     // util::DisplayName,
     Session,
+    SourceFileKind,
 };
 use clang::{
     self, source, source::SourceRange, Accessibility, Clang, Entity, EntityKind, EntityVisitResult,
@@ -60,6 +61,17 @@ intern_key!(TypeId);
 pub struct SourceFile {
     module: ModuleId,
     file: LocalFileId,
+}
+impl SourceFile {
+    pub(crate) fn get_name_and_contents(&self, db: &impl db::AstMethods) -> (String, String) {
+        db::with_ast_module(db, self.module, |_, ctx| {
+            let file = ctx.files.lookup(self.file);
+            (
+                file.get_path().as_path().to_string_lossy().into(),
+                file.get_contents().unwrap_or_default(),
+            )
+        })
+    }
 }
 
 /// Context for a given translation unit, used to resolve queries.
@@ -149,20 +161,6 @@ fn lower_ty(db: &impl db::AstMethods, mdl: ModuleId, ty: TypeId) -> Outcome<cc::
     db::with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
         ast.types.lookup(ty).0.lower(&LowerCtx::new(db, mdl, ast))
     })
-}
-
-pub(crate) struct File;
-impl File {
-    pub(crate) fn get_name_and_contents(db: &impl db::AstMethods, id: FileId) -> (String, String) {
-        let source = db.lookup_intern_source_file(id);
-        db::with_ast_module(db, source.module, |_, ctx| {
-            let file = ctx.files.lookup(source.file);
-            (
-                file.get_path().as_path().to_string_lossy().into(),
-                file.get_contents().unwrap_or_default(),
-            )
-        })
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -557,7 +555,7 @@ fn maybe_span_from_range<'tu>(
         file: file_id,
     };
     Some(Span::new(
-        db.intern_source_file(source),
+        db.intern_source_file(SourceFileKind::Cc(source)),
         start.offset,
         end.offset,
     ))

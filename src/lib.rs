@@ -27,10 +27,10 @@ use std::{
 use structopt::StructOpt;
 
 use io::Write;
-pub(crate) use libclang::File;
 
 #[salsa::database(
     libclang::AstMethodsStorage,
+    diagnostics::db::SourceFileInternerStorage,
     diagnostics::db::BasicFileCacheStorage,
     ir::IrMethodsStorage,
     ir::cc::RsIrStorage
@@ -39,8 +39,20 @@ pub struct Database {
     runtime: salsa::Runtime<Database>,
 }
 
-pub trait FileInterner: libclang::AstMethods {}
-impl FileInterner for Database {}
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub enum SourceFileKind {
+    Cc(libclang::SourceFile),
+    //Rs(cc_use)
+}
+impl SourceFileKind {
+    fn get_name_and_contents(&self, db: &impl SourceFileLookup) -> (String, String) {
+        match self {
+            SourceFileKind::Cc(src) => src.get_name_and_contents(db),
+        }
+    }
+}
+pub trait SourceFileLookup: libclang::AstMethods {}
+impl SourceFileLookup for Database {}
 
 impl salsa::Database for Database {
     fn salsa_runtime(&self) -> &salsa::Runtime<Database> {

@@ -1,8 +1,8 @@
 //! Adapts the libclang types for storage alongside the salsa database.
 
-use super::{ModuleContextInner, ModuleId, SourceFile, TypeId};
+use super::{ModuleContextInner, ModuleId, TypeId};
 use crate::{
-    diagnostics::{self, Outcome},
+    diagnostics::{db::SourceFileInterner, Outcome},
     ir,
 };
 use clang::TranslationUnit;
@@ -13,15 +13,12 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[salsa::query_group(AstMethodsStorage)]
-pub trait AstMethods {
+pub trait AstMethods: SourceFileInterner {
     #[salsa::dependencies]
     fn ast_context(&self) -> ();
 
     fn cc_module_ids(&self) -> Vec<ModuleId>;
     fn cc_ir_from_src(&self, mdl: ModuleId) -> Arc<Outcome<ir::Module>>;
-
-    #[salsa::interned]
-    fn intern_source_file(&self, file: SourceFile) -> diagnostics::FileId;
 
     #[salsa::invoke(crate::libclang::lower_ty)]
     fn type_of(&self, mdl: ModuleId, id: TypeId) -> Outcome<ir::cc::Ty>;

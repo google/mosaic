@@ -1,5 +1,5 @@
 use crate::{
-    diagnostics::{Diagnostics, Outcome},
+    diagnostics::{Diagnostic, Diagnostics, Outcome},
     libclang, Session,
 };
 use proc_macro2::Span;
@@ -124,8 +124,12 @@ impl Parse for CcUse {
 }
 
 impl From<syn::Error> for Diagnostics {
-    fn from(errs: syn::Error) -> Self {
-        todo!()
+    fn from(input: syn::Error) -> Self {
+        let output = Diagnostics::new();
+        for _err in input {
+            todo!()
+        }
+        output
     }
 }
 
@@ -184,12 +188,13 @@ fn load_cc_module(
 ) -> Result<libclang::ModuleContext, libclang::SourceError> {
     // TODO use items
     Ok(libclang::parse_with(sess, index, |index| {
+        let line = cc_use.header.span.start().line;
         let src = if cc_use.header.is_system {
-            format!("#include <{}>", cc_use.header.path)
+            format!("#line {}\n#include <{}>", line, cc_use.header.path)
         } else {
-            format!("#include \"{}\"", cc_use.header.path)
+            format!("#line {}\n#include \"{}\"", line, cc_use.header.path)
         };
-        // Use the rust source as the path so it shows up in errors
+        // Use the rust source as the path so it shows up in "not found" errors
         let mut parser = libclang::configure(index.parser(rs_src_path));
         let unsaved = clang::Unsaved::new(rs_src_path, src);
         // TODO don't unwrap

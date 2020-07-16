@@ -32,6 +32,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("");
 
+    let ui_failed = std::panic::catch_unwind(|| {
+        let strategy = RunGenerator {
+            source_root: source_root.into(),
+        };
+        let t = trybuild::TestCases::new_with_strategy(strategy);
+        t.compile_fail("test/ui/*.cc");
+    })
+    .is_err();
+
     let mut failures = vec![];
     let mut passes = 0usize;
     for test in source_root.join("test").join("run-make").read_dir()? {
@@ -57,8 +66,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let failed = !failures.is_empty();
-    if failed && !nocapture {
+    if !failures.is_empty() && !nocapture {
         println!("");
         println!("failures:");
         println!("");
@@ -81,6 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let failed = !failures.is_empty() || ui_failed;
     let result = if failed { "FAILED" } else { "ok" };
     println!("");
     println!(
@@ -95,6 +104,32 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+#[derive(Debug)]
+struct RunGenerator {
+    source_root: PathBuf,
+}
+impl trybuild::Strategy for RunGenerator {
+    fn prepare(&mut self, _tests: &[trybuild::Test]) -> trybuild::Result<trybuild::Project> {
+        let mut project = trybuild::Project::new()?;
+        project.source_dir = self.source_root.clone();
+        Ok(project)
+    }
+
+    fn build(&self, test: &trybuild::Test) -> trybuild::Result<Command> {
+        let mut cmd = if cfg!(windows) {
+            Command::new(self.source_root.join("target\\debug\\peasy.exe"))
+        } else {
+            Command::new(self.source_root.join("target/debug/peasy"))
+        };
+        cmd.arg(test.path()).env("TERM", "dumb");
+        Ok(cmd)
+    }
+
+    fn run(&self, _test: &trybuild::Test) -> trybuild::Result<Command> {
+        unimplemented!()
+    }
 }
 
 enum TestResult {

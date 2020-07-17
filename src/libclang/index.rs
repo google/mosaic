@@ -40,7 +40,7 @@ impl NodeId {
 #[derive(Debug, Default)]
 pub struct Node<'tu> {
     //kind: EntityKind,
-    entities: Vec<Entity<'tu>>,
+    pub entities: Vec<Entity<'tu>>,
     items: Option<HashMap<Ident, NodeId>>,
     inline_items: Vec<NodeId>,
 }

@@ -16,6 +16,8 @@ use std::{
 };
 use termcolor::{self, ColorChoice};
 
+pub use codespan::{ColumnIndex, LineIndex, Location};
+
 pub mod db {
     use super::*;
     use codespan_reporting::files::SimpleFile;
@@ -106,6 +108,30 @@ impl Span {
         Span {
             file_id,
             span: codespan::Span::new(start_offset, end_offset),
+        }
+    }
+
+    pub fn from_location(
+        db: &impl db::BasicFileCache,
+        file_id: FileId,
+        start: Location,
+        end: Location,
+    ) -> Self {
+        let get_offset = |loc: Location| {
+            use codespan_reporting::files::Files;
+            let files = db::FilesWrapper(db);
+            let line_bytes = files.line_range(file_id, loc.line.to_usize()).unwrap();
+            let source: &str = &files.source(file_id).unwrap();
+            let offset = source[line_bytes.clone()]
+                .char_indices()
+                .nth(loc.column.to_usize())
+                .unwrap()
+                .0;
+            codespan::ByteIndex((line_bytes.start + offset) as u32)
+        };
+        Span {
+            file_id,
+            span: codespan::Span::new(get_offset(start), get_offset(end)),
         }
     }
 

@@ -1,0 +1,5 @@
+error: item not found: `Baz`
+  ┌─ test/ui/cc_use.rs:1:26
+  │
+1 │ cc_use!("cc_use.h", Foo, Baz, Bar);
+  │                          ^^^ this item could not be found

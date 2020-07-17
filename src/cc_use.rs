@@ -1,6 +1,10 @@
 use crate::{
-    diagnostics::{Diagnostics, Outcome},
-    libclang, Session,
+    diagnostics::{
+        self,
+        db::{FileId, SourceFileInterner},
+        Diagnostics, Outcome,
+    },
+    ir, libclang, Session, SourceFileKind,
 };
 use proc_macro2::Span;
 use std::fs::File;
@@ -135,6 +139,17 @@ impl From<syn::Error> for Diagnostics {
     }
 }
 
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct SourceFile {
+    name: String,
+    contents: String,
+}
+impl SourceFile {
+    pub(crate) fn get_name_and_contents(&self) -> (String, String) {
+        (self.name.clone(), self.contents.clone())
+    }
+}
+
 pub(crate) fn process_rs_input(
     sess: &Session,
     index: &libclang::Index,
@@ -142,6 +157,12 @@ pub(crate) fn process_rs_input(
 ) -> io::Result<Outcome<Vec<libclang::ModuleContext>>> {
     let mut content = String::new();
     File::open(input_path)?.read_to_string(&mut content)?;
+
+    let source = SourceFile {
+        name: input_path.to_string_lossy().to_string(),
+        contents: content.clone(),
+    };
+    let file_id = sess.db.intern_source_file(SourceFileKind::Rs(source));
 
     // TODO: we can improve performance by not parsing everything in the file.
     let ast = match syn::parse_file(&content) {
@@ -173,7 +194,7 @@ pub(crate) fn process_rs_input(
                 continue;
             }
         };
-        match load_cc_module(sess, index, input_path, &cc_use) {
+        match load_cc_module(sess, index, input_path, &cc_use, file_id) {
             Ok(module) => cc_modules.push(module),
             Err(err) => errs.append(err.into()),
         }
@@ -182,14 +203,45 @@ pub(crate) fn process_rs_input(
     Ok(Outcome::from_parts(cc_modules, errs))
 }
 
+impl From<&CcPath> for ir::cc::Path {
+    fn from(other: &CcPath) -> Self {
+        other
+            .segments
+            .iter()
+            .map(|segment| {
+                assert!(segment.arguments.is_empty());
+                ir::cc::Ident::from(segment.ident.to_string())
+            })
+            .collect()
+    }
+}
+
+fn span(
+    db: &impl diagnostics::db::BasicFileCache,
+    file_id: FileId,
+    span: Span,
+) -> diagnostics::Span {
+    // In proc_macro2 the lines are 1-indexed and columns are 0-indexed, whereas in codespan they
+    // are both 0-indexed.
+    let start =
+        diagnostics::Location::new(span.start().line as u32 - 1, span.start().column as u32);
+    let end = diagnostics::Location::new(span.end().line as u32 - 1, span.end().column as u32);
+    diagnostics::Span::from_location(db, file_id, start, end)
+}
+
 fn load_cc_module(
     sess: &Session,
     index: &libclang::Index,
     rs_src_path: &Path,
     cc_use: &CcUse,
+    file_id: FileId,
 ) -> Result<libclang::ModuleContext, libclang::SourceError> {
-    // TODO use items
-    Ok(libclang::parse_with(sess, index, |index| {
+    let paths = cc_use
+        .cc_paths
+        .iter()
+        .map(|path| (path.into(), span(&sess.db, file_id, path.span())))
+        .collect();
+    Ok(libclang::parse_with(sess, index, paths, |index| {
         let line = cc_use.header.span.start().line;
         let src = if cc_use.header.is_system {
             format!("#line {}\n#include <{}>", line, cc_use.header.path)

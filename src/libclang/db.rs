@@ -1,4 +1,7 @@
 //! Adapts the libclang types for storage alongside the salsa database.
+//!
+//! Unfortunately, there's a lot of back-and-forth calling between libclang and here, due to our
+//! need to wrap a lot of objects in rental types.
 
 use super::{ModuleContextInner, ModuleId, TypeId};
 use crate::{
@@ -127,9 +130,9 @@ rental! {
 
 pub struct ModuleContext(rent::ModuleContext);
 impl ModuleContext {
-    pub fn new(tu: AstTu) -> Self {
+    pub fn new(tu: AstTu, imports: Vec<(super::Path, super::Span)>) -> Self {
         ModuleContext(rent::ModuleContext::new(tu.0, |tu| {
-            super::ModuleContextInner::new(tu.tu)
+            super::ModuleContextInner::new(tu.tu, imports)
         }))
     }
     pub(super) fn with<R>(

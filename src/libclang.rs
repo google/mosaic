@@ -56,7 +56,6 @@ impl<T: Hash + Eq + Clone, Id: salsa::InternKey + Copy> Interner<T, Id> {
 intern_key!(ModuleId);
 intern_key!(LocalFileId);
 intern_key!(EntityId);
-intern_key!(ExportId);
 intern_key!(TypeId);
 
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
@@ -82,10 +81,10 @@ struct ModuleContextInner<'tu> {
     root: clang::Entity<'tu>,
     // TODO do something with these (and we don't have to store them)
     diagnostics: Vec<clang::diagnostic::Diagnostic<'tu>>,
+    import_paths: Vec<(Path, Span)>,
 
     files: Interner<source::File<'tu>, LocalFileId>,
     entities: Interner<Entity<'tu>, EntityId>,
-    exports: Interner<(Path, Export<'tu>), ExportId>,
 
     //def_to_entity: HashMap<Def, Entity<'tu>>,
     //entity_to_def: HashMap<Entity<'tu>, Def>,
@@ -93,14 +92,14 @@ struct ModuleContextInner<'tu> {
 }
 
 impl<'tu> ModuleContextInner<'tu> {
-    pub fn new(tu: &'tu TranslationUnit<'tu>) -> Self {
+    pub fn new(tu: &'tu TranslationUnit<'tu>, imports: Vec<(Path, Span)>) -> Self {
         ModuleContextInner {
             root: tu.get_entity(),
             diagnostics: tu.get_diagnostics(),
+            import_paths: imports,
 
             files: Interner::new(),
             entities: Interner::new(),
-            exports: Interner::new(),
 
             //def_to_entity: HashMap::default(),
             //entity_to_def: HashMap::default(),
@@ -122,7 +121,7 @@ pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
 }
 
 pub(crate) fn parse(sess: &Session, index: &Index, filename: &path::Path) -> ModuleContext {
-    parse_with(sess, index, |index| {
+    parse_with(sess, index, vec![], |index| {
         let parser = index.parser(filename);
         configure(parser).parse().unwrap()
     })
@@ -131,10 +130,11 @@ pub(crate) fn parse(sess: &Session, index: &Index, filename: &path::Path) -> Mod
 pub(crate) fn parse_with(
     _sess: &Session,
     index: &Index,
+    imports: Vec<(Path, Span)>,
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
 ) -> db::ModuleContext {
     let tu = index.clone().parse_with(parse_fn);
-    db::ModuleContext::new(tu)
+    db::ModuleContext::new(tu, imports)
 }
 
 pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
@@ -152,24 +152,18 @@ impl From<clang::SourceError> for Diagnostics {
     }
 }
 
-fn lower_ast(db: &impl db::AstMethods, mdl: ModuleId) -> Outcome<Module> {
-    db::with_ast_module(db, mdl, |tu, ast| -> Outcome<Module> {
-        let exports = get_exports(db, mdl, ast, tu);
-        exports.then(|exports| LowerCtx::new(db, mdl, ast).lower(&exports))
-    })
-}
-
-fn lower_ty(db: &impl db::AstMethods, mdl: ModuleId, ty: TypeId) -> Outcome<cc::Ty> {
-    db::with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
-        ast.types.lookup(ty).0.lower(&LowerCtx::new(db, mdl, ast))
-    })
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum Export<'tu> {
+pub enum ExportKind<'tu> {
     Decl(Entity<'tu>),
     Type(HashType<'tu>),
     TemplateType(Entity<'tu>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct Export<'tu> {
+    name: Path,
+    kind: ExportKind<'tu>,
+    span: Span,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,80 +174,164 @@ impl<'tu> Hash for HashType<'tu> {
     }
 }
 
-fn get_exports<'tu>(
-    db: &impl AstMethods,
-    mdl: ModuleId,
-    ast: &ModuleContextInner<'tu>,
-    tu: &'tu TranslationUnit<'tu>,
-) -> Outcome<Vec<(Path, Export<'tu>)>> {
-    let mut outcome = ok(());
-    let mut exports = vec![];
-    for ent in tu.get_entity().get_children() {
-        if let EntityKind::Namespace = ent.get_kind() {
-            if let Some("rust_export") = ent.get_name().as_deref() {
-                outcome = outcome.then(|_| handle_rust_export(db, mdl, ast, ent, &mut exports));
-            }
-        }
-    }
-    outcome.then(|()| ok(exports))
+fn lower_ast(db: &impl db::AstMethods, mdl: ModuleId) -> Outcome<Module> {
+    db::with_ast_module(db, mdl, |tu, ast| -> Outcome<Module> {
+        let ctx = LowerCtx { db, mdl, ast };
+        ctx.get_exports(tu).then(|exports| ctx.lower(&exports))
+    })
 }
 
-fn handle_rust_export<'tu>(
-    db: &impl AstMethods,
-    mdl: ModuleId,
-    ast: &ModuleContextInner<'tu>,
-    ns: Entity<'tu>,
-    exports: &mut Vec<(Path, Export<'tu>)>,
-) -> Outcome<()> {
-    Diagnostics::build(|diags| {
-        for decl in ns.get_children() {
-            // println!("{:?}", decl);
-            let name = Path::from(decl.get_name().unwrap());
-            match decl.get_kind() {
-                EntityKind::UsingDeclaration => {
-                    exports.push((name, Export::Decl(decl.get_reference().unwrap())))
-                }
-                EntityKind::TypeAliasDecl => exports.push((
-                    name,
-                    Export::Type(HashType(decl.get_typedef_underlying_type().unwrap())),
-                )),
-                EntityKind::TypeAliasTemplateDecl => {
-                    exports.push((name, Export::TemplateType(decl)))
-                }
-                _ => diags.add(Diagnostic::error(
-                    "invalid rust_export item",
-                    span(db, mdl, ast, decl).label("only using declarations are allowed here"),
-                )),
-            }
-        }
+fn lower_ty(db: &impl db::AstMethods, mdl: ModuleId, ty: TypeId) -> Outcome<cc::Ty> {
+    db::with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
+        ast.types.lookup(ty).0.lower(&LowerCtx { db, mdl, ast })
     })
-    .into()
 }
 
 struct LowerCtx<'ctx, 'tu, DB: db::AstMethods> {
     db: &'ctx DB,
     mdl: ModuleId,
     ast: &'ctx ModuleContextInner<'tu>,
-    //visible: Vec<(Path, Entity<'tu>)>,
 }
 
 impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
-    fn new(db: &'ctx DB, mdl: ModuleId, ast: &'ctx ModuleContextInner<'tu>) -> Self {
-        LowerCtx {
-            db,
-            mdl,
-            ast,
-            //visible: vec![],
+    fn get_exports(&self, tu: &'tu TranslationUnit<'tu>) -> Outcome<Vec<Export<'tu>>> {
+        // There are two kinds of exports currently supported: exports by the C++ header itself, in
+        // the form of a `rust_export` namespace, and imports from cc_use! in Rust code. Handle
+        // them both here.
+        let mut exports = vec![];
+        let mut indices = HashMap::new();
+
+        let errs = Diagnostics::build(|mut diags| {
+            for ent in tu.get_entity().get_children() {
+                if let EntityKind::Namespace = ent.get_kind() {
+                    if let Some("rust_export") = ent.get_name().as_deref() {
+                        for decl in ent.get_children() {
+                            self.handle_rust_export(decl, &mut exports, &mut indices, &mut diags);
+                        }
+                    }
+                }
+            }
+
+            let mut index = index::PathIndex::new(tu);
+            for (path, span) in &self.ast.import_paths {
+                self.handle_rust_import(
+                    path,
+                    span,
+                    &mut index,
+                    &mut exports,
+                    &mut indices,
+                    &mut diags,
+                );
+            }
+        });
+
+        Outcome::from_parts(exports, errs)
+    }
+
+    fn handle_rust_export(
+        &self,
+        decl: Entity<'tu>,
+        exports: &mut Vec<Export<'tu>>,
+        indices: &mut HashMap<Path, usize>,
+        diags: &mut Diagnostics,
+    ) {
+        let name = Path::from(decl.get_name().unwrap());
+        match self.make_export(decl) {
+            Some(kind) => {
+                self.maybe_add_export(name, kind, self.span(decl), exports, indices, diags);
+            }
+            None => diags.add(Diagnostic::error(
+                "invalid rust_export item",
+                self.span(decl)
+                    .label("only using declarations are allowed here"),
+            )),
         }
     }
 
-    fn lower(&self, exports: &Vec<(Path, Export<'tu>)>) -> Outcome<Module> {
+    fn make_export(&self, decl: Entity<'tu>) -> Option<ExportKind<'tu>> {
+        Some(match decl.get_kind() {
+            EntityKind::UsingDeclaration => ExportKind::Decl(decl.get_reference().unwrap()),
+            EntityKind::TypeAliasDecl => {
+                ExportKind::Type(HashType(decl.get_typedef_underlying_type().unwrap()))
+            }
+            EntityKind::TypeAliasTemplateDecl => ExportKind::TemplateType(decl),
+            _ => return None,
+        })
+    }
+
+    fn maybe_add_export(
+        &self,
+        name: Path,
+        kind: ExportKind<'tu>,
+        span: Span,
+        exports: &mut Vec<Export<'tu>>,
+        indices: &mut HashMap<Path, usize>,
+        diags: &mut Diagnostics,
+    ) {
+        if let Some(idx) = indices.get(&name) {
+            let existing_export = &exports[*idx];
+            if existing_export.kind != kind {
+                diags.add(
+                    Diagnostic::error(
+                        "conflicting name in exported items",
+                        span.label(format!("the name `{}` has already been exported", name)),
+                    )
+                    .with_label(existing_export.span.label("previous export defined here")),
+                )
+            }
+            return;
+        }
+        exports.push(Export { name, kind, span });
+    }
+
+    fn handle_rust_import(
+        &self,
+        path: &Path,
+        span: &Span,
+        index: &mut index::PathIndex<'tu>,
+        exports: &mut Vec<Export<'tu>>,
+        indices: &mut HashMap<Path, usize>,
+        diags: &mut Diagnostics,
+    ) {
+        let ent = match index.lookup(path) {
+            Ok(node) => match node.entities.as_slice() {
+                [ent] => *ent,
+                [] => unreachable!(),
+                // There are cases where we'll want to handle multiple items of the same name (e.g.
+                // template specializations), but don't yet. We'll need to find the "most general
+                // instance" of that name, somehow.
+                _ => todo!("report error"),
+            },
+            Err(index::LookupError::NotFound(_)) => {
+                return diags.add(Diagnostic::error(
+                    format!("item not found: `{}`", path),
+                    span.label("this item could not be found"),
+                ));
+            }
+        };
+        // Assume this would be an ordinary using decl. TODO: Don't.
+        let span = self.span(ent); // TODO this should be a span to the rust cc_use
+        self.maybe_add_export(
+            path.clone(),
+            ExportKind::Decl(ent),
+            span,
+            exports,
+            indices,
+            diags,
+        );
+    }
+}
+
+impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
+    fn lower(&self, exports: &Vec<Export<'tu>>) -> Outcome<Module> {
         //let mut visitor = AstVisitor::new(&self);
         let mut outcome = ok(());
         let mut mdl = Module::default();
         let mut export_set = HashSet::new();
-        for (name, export) in exports {
-            outcome = outcome.then(|()| self.lower_export(name, export, &mut mdl, &mut export_set));
+        for export in exports {
+            outcome = outcome.then(|()| {
+                self.lower_export(&export.name, &export.kind, &mut mdl, &mut export_set)
+            });
         }
         outcome.then(|()| ok(mdl))
     }
@@ -261,12 +339,12 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
     fn lower_export(
         &self,
         name: &Path,
-        export: &Export<'tu>,
+        export: &ExportKind<'tu>,
         mdl: &mut Module,
         export_set: &mut HashSet<DefKind>,
     ) -> Outcome<()> {
         match export {
-            Export::Decl(decl_ref) => self.lower_decl(name, *decl_ref).then(|item| {
+            ExportKind::Decl(decl_ref) => self.lower_decl(name, *decl_ref).then(|item| {
                 if let Some(kind) = item {
                     let def = DefKind::CcDef(kind);
                     if !export_set.insert(def.clone()) {
@@ -285,7 +363,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                 }
                 ok(())
             }),
-            Export::Type(ty) => {
+            ExportKind::Type(ty) => {
                 println!("{} = {:?}", name, ty);
                 println!(
                     "  {:?}",
@@ -295,7 +373,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                 );
                 ok(())
             }
-            Export::TemplateType(t) => {
+            ExportKind::TemplateType(t) => {
                 println!("{} = {:?}", name, t);
                 for child in t.get_children() {
                     match child.get_kind() {
@@ -319,9 +397,13 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
     }
 
     fn lower_decl(&self, name: &Path, decl_ref: Entity<'tu>) -> Outcome<Option<cc::ItemKind>> {
-        let overloads = decl_ref.get_overloaded_declarations().unwrap();
-        assert_eq!(overloads.len(), 1);
-        let ent = overloads[0];
+        let ent = decl_ref
+            .get_overloaded_declarations()
+            .map(|overloads| {
+                assert_eq!(overloads.len(), 1);
+                overloads[0]
+            })
+            .unwrap_or(decl_ref);
 
         // println!("{} = {:?}", name, ent);
         // for child in ent.get_children() {

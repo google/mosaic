@@ -41,12 +41,13 @@ pub struct Database {
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum SourceFileKind {
     Cc(libclang::SourceFile),
-    //Rs(cc_use)
+    Rs(cc_use::SourceFile),
 }
 impl SourceFileKind {
     fn get_name_and_contents(&self, db: &impl SourceFileLookup) -> (String, String) {
         match self {
             SourceFileKind::Cc(src) => src.get_name_and_contents(db),
+            SourceFileKind::Rs(src) => src.get_name_and_contents(),
         }
     }
 }

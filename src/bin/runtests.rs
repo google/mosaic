@@ -38,6 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         let t = trybuild::TestCases::new_with_strategy(strategy);
         t.compile_fail("test/ui/*.cc");
+        t.compile_fail("test/ui/*.rs");
     })
     .is_err();
 

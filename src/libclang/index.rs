@@ -4,13 +4,10 @@
 use crate::ir::cc::{Ident, Path};
 use clang::{self, Entity, EntityKind};
 use std::collections::HashMap;
-use thiserror::Error;
 
 /// Represents errors which can occur while looking up entities in the index.
-#[derive(Error, Debug)]
-#[non_exhaustive]
+#[derive(Debug)]
 pub enum LookupError {
-    #[error("couldn't find `{0}`")]
     NotFound(Path),
 }
 

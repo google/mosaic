@@ -460,30 +460,26 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         let mut offsets = vec![];
         let mut methods = vec![];
         let mut errs = Diagnostics::new();
-        let mut keep_going = true;
         ent.visit_children(|child, _| {
-            keep_going = match child.get_kind() {
+            match child.get_kind() {
                 EntityKind::FieldDecl => {
                     self.lower_field(child, &mut fields, &mut offsets, &mut errs)
                 }
                 EntityKind::Method => self.lower_method(child, &mut methods, &mut errs),
                 EntityKind::AlignedAttr => {
                     // Nothing to do, we get the alignment directly from libclang.
-                    true
                 }
                 EntityKind::PackedAttr => {
                     errs.add(Diagnostic::error(
                         "packed structs not supported",
                         self.span(child).label("this attribute is not allowed"),
                     ));
-                    false
                 }
                 EntityKind::UnexposedAttr => {
                     errs.add(Diagnostic::warn(
                         "unknown attribute",
                         self.span(child).label("this attribute is not recognized"),
                     ));
-                    true
                 }
                 _ => {
                     errs.add(Diagnostic::bug(
@@ -493,17 +489,12 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                     ));
                     #[cfg(test)]
                     eprintln!("unhandled child: {:?}", child);
-                    true
                 }
             };
-            if keep_going {
-                EntityVisitResult::Continue
-            } else {
-                EntityVisitResult::Break
-            }
+            EntityVisitResult::Continue
         });
 
-        let st = if keep_going {
+        let st = if errs.is_empty() {
             let st = self.db.intern_cc_struct(cc::Struct {
                 name: name.clone(),
                 fields,
@@ -526,10 +517,10 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         fields: &mut Vec<Field>,
         offsets: &mut Vec<u16>,
         errs: &mut Diagnostics,
-    ) -> bool {
+    ) {
         if let Some(acc) = field.get_accessibility() {
             if Accessibility::Public != acc {
-                return true;
+                return;
             }
         }
         let field_name = match field.get_name() {
@@ -537,7 +528,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             // Don't "peer through" anonymous struct/union fields, for now.
             // This will report an error when checking layouts.
             // TODO report an error here
-            None => return true,
+            None => return,
         };
         let ty = self.mk_type_ref(field.get_type().unwrap());
         fields.push(Field {
@@ -557,10 +548,9 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
                 self.span(field)
                     .label("only fields at byte offsets are supported"),
             ));
-            return false;
+            return;
         }
         offsets.push(offset / 8);
-        true
     }
 
     fn lower_method(
@@ -568,7 +558,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
         method: Entity<'tu>,
         methods: &mut Vec<cc::Function>,
         errs: &mut Diagnostics,
-    ) -> bool {
+    ) {
         let ty = method.get_type().unwrap();
         // eprintln!("calling convention: {:?}", ty.get_calling_convention());
         let mut param_tys = vec![];
@@ -597,7 +587,6 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
             is_method: !method.is_static_method(),
             is_const: method.is_const_method(),
         });
-        true
     }
 
     fn mk_type_ref(&self, ty: clang::Type<'tu>) -> TypeRef {

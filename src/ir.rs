@@ -861,7 +861,6 @@ mod tests {
                 using ::Pod;
             }
         });
-        dbg!(&ir);
         let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
         assert_eq!(
             st.fields
@@ -871,6 +870,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("a", 0), ("b", 4), ("c", 8), ("d", 9), ("e", 16), ("f", 24)],
         );
+    }
+
+    // TODO
+    #[test]
+    #[should_panic(expected = "lowering errors")]
+    fn anonymous_field() {
+        let mut sess = Session::test();
+        let ir = cpp_lower!(sess, {
+            struct Pod {
+                int;
+            };
+            namespace rust_export {
+                using ::Pod;
+            }
+        });
+        let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
+        assert_eq!(rs::Size::new(4), st.size);
+        assert_eq!(rs::Align::new(4), st.align);
     }
 
     #[test]

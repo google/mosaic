@@ -6,6 +6,7 @@ use crate::{
     },
     ir, libclang, Session, SourceFileKind,
 };
+use diagnostics::{db::BasicFileCache, Diagnostic};
 use proc_macro2::Span;
 use std::fs::File;
 use std::{
@@ -129,27 +130,6 @@ impl Parse for CcUse {
     }
 }
 
-impl From<syn::Error> for Diagnostics {
-    fn from(input: syn::Error) -> Self {
-        let output = Diagnostics::new();
-        for _err in input {
-            todo!()
-        }
-        output
-    }
-}
-
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct SourceFile {
-    name: String,
-    contents: String,
-}
-impl SourceFile {
-    pub(crate) fn get_name_and_contents(&self) -> (String, String) {
-        (self.name.clone(), self.contents.clone())
-    }
-}
-
 pub(crate) fn process_rs_input(
     sess: &Session,
     index: &libclang::Index,
@@ -167,7 +147,7 @@ pub(crate) fn process_rs_input(
     // TODO: we can improve performance by not parsing everything in the file.
     let ast = match syn::parse_file(&content) {
         Ok(ast) => ast,
-        Err(err) => return Ok(Outcome::from_parts(vec![], err.into())),
+        Err(err) => return Ok(Outcome::from_parts(vec![], error(&sess.db, file_id, err))),
     };
 
     // TODO: actually resolve names enough to know if this is our macro or not, and recognize
@@ -190,7 +170,7 @@ pub(crate) fn process_rs_input(
         let cc_use: CcUse = match mac.mac.parse_body() {
             Ok(cc_use) => cc_use,
             Err(err) => {
-                errs.append(err.into());
+                errs.append(error(&sess.db, file_id, err));
                 continue;
             }
         };
@@ -201,32 +181,6 @@ pub(crate) fn process_rs_input(
     }
 
     Ok(Outcome::from_parts(cc_modules, errs))
-}
-
-impl From<&CcPath> for ir::cc::Path {
-    fn from(other: &CcPath) -> Self {
-        other
-            .segments
-            .iter()
-            .map(|segment| {
-                assert!(segment.arguments.is_empty());
-                ir::cc::Ident::from(segment.ident.to_string())
-            })
-            .collect()
-    }
-}
-
-fn span(
-    db: &impl diagnostics::db::BasicFileCache,
-    file_id: FileId,
-    span: Span,
-) -> diagnostics::Span {
-    // In proc_macro2 the lines are 1-indexed and columns are 0-indexed, whereas in codespan they
-    // are both 0-indexed.
-    let start =
-        diagnostics::Location::new(span.start().line as u32 - 1, span.start().column as u32);
-    let end = diagnostics::Location::new(span.end().line as u32 - 1, span.end().column as u32);
-    diagnostics::Span::from_location(db, file_id, start, end)
 }
 
 fn load_cc_module(
@@ -254,4 +208,48 @@ fn load_cc_module(
         // TODO don't unwrap
         parser.unsaved(&[unsaved]).parse().unwrap()
     }))
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct SourceFile {
+    name: String,
+    contents: String,
+}
+impl SourceFile {
+    pub(crate) fn get_name_and_contents(&self) -> (String, String) {
+        (self.name.clone(), self.contents.clone())
+    }
+}
+
+fn span(db: &impl BasicFileCache, file_id: FileId, span: Span) -> diagnostics::Span {
+    // In proc_macro2 the lines are 1-indexed and columns are 0-indexed, whereas in codespan they
+    // are both 0-indexed.
+    let start =
+        diagnostics::Location::new(span.start().line as u32 - 1, span.start().column as u32);
+    let end = diagnostics::Location::new(span.end().line as u32 - 1, span.end().column as u32);
+    diagnostics::Span::from_location(db, file_id, start, end)
+}
+
+fn error(db: &impl BasicFileCache, file_id: FileId, input: syn::Error) -> Diagnostics {
+    Diagnostics::build(|errs| {
+        for err in input {
+            errs.add(Diagnostic::error(
+                err.to_string(),
+                span(db, file_id, err.span()).label(err.to_string()),
+            ));
+        }
+    })
+}
+
+impl From<&CcPath> for ir::cc::Path {
+    fn from(other: &CcPath) -> Self {
+        other
+            .segments
+            .iter()
+            .map(|segment| {
+                assert!(segment.arguments.is_empty());
+                ir::cc::Ident::from(segment.ident.to_string())
+            })
+            .collect()
+    }
 }

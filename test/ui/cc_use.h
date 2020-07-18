@@ -1,2 +1,5 @@
-struct Foo { char a };
-struct Bar { char a };
+struct A { char a };
+struct B { char a };
+namespace Foo {
+    struct C { char a };
+}

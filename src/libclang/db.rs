@@ -133,9 +133,13 @@ rental! {
 
 pub struct ModuleContext(rent::ModuleContext);
 impl ModuleContext {
-    pub fn new(tu: AstTu, imports: Vec<(super::Path, super::Span)>) -> Self {
+    pub fn new(
+        db: &impl SourceFileCache,
+        tu: AstTu,
+        imports: Vec<(super::Path, super::Span)>,
+    ) -> Self {
         ModuleContext(rent::ModuleContext::new(tu.0, |tu| {
-            super::ModuleContextInner::new(tu.tu, imports)
+            super::ModuleContextInner::new(db, tu.tu, imports)
         }))
     }
     pub(super) fn with<R>(

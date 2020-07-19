@@ -34,6 +34,12 @@ error: expected `in` or `,`
 7 │ cc_use!("cc_use.h" on "libfoo", B);
   │                    ^^ expected `in` or `,`
 
+error: 'nonexistent.h' file not found
+  ┌─ test/ui/cc_use.rs:2:10
+  │
+2 │ #include "nonexistent.h"
+  │          ^^^^^^^^^^^^^^^
+
 error: item not found: `Zed`
   ┌─ test/ui/cc_use.rs:1:24
   │

@@ -141,7 +141,8 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
         errs.emit(&sess.db, &sess.diags);
         modules
     } else {
-        vec![libclang::parse(&sess, &index, &input_path)]
+        let module_id = libclang::ModuleId::new(0);
+        vec![libclang::parse(&sess, &index, module_id, &input_path)]
     };
 
     let out_rs = tempfile::Builder::new().tempfile_in(out_dir)?;
@@ -158,7 +159,7 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
 
 fn run_generator(
     sess: &mut Session,
-    cc_modules: Vec<libclang::ModuleContext>,
+    parsed_cc_modules: Vec<(libclang::ModuleContext, libclang::ParseErrors)>,
     include_path: &str,
     out_rs: impl Write,
     out_cc: impl Write,
@@ -171,12 +172,19 @@ fn run_generator(
         hdr: None,
     };
 
+    let (cc_modules, parse_errs): (Vec<_>, Vec<_>) = parsed_cc_modules.into_iter().unzip();
+
     let diags = &sess.diags;
     libclang::set_ast(&mut sess.db, cc_modules, |db| {
+        for errs in parse_errs {
+            errs.to_diagnostics(db).emit(db, diags);
+        }
+
         use ir::cc::RsIr;
         let rs_module = db.rs_bindings();
         let (rs_module, errs) = rs_module.to_ref().split();
         errs.clone().emit(db, diags);
+
         if diags.has_errors() {
             return false;
         }

@@ -17,6 +17,7 @@ use std::{
 use termcolor::{self, ColorChoice};
 
 pub use codespan::{ColumnIndex, LineIndex, Location};
+pub use imp::Severity;
 
 pub mod db {
     use super::*;
@@ -139,6 +140,11 @@ impl Span {
         let range = self.span.start().to_usize()..self.span.end().to_usize();
         Label(imp::Label::primary(self.file_id, range).with_message(message))
     }
+
+    pub fn label_no_message(&self) -> Label {
+        let range = self.span.start().to_usize()..self.span.end().to_usize();
+        Label(imp::Label::primary(self.file_id, range))
+    }
 }
 
 /// A message associated with a Span.
@@ -229,6 +235,12 @@ impl fmt::Debug for Diagnostic {
 }
 
 impl Diagnostic {
+    /// The "raw" API for creating a diagnostic. Should not be used except for converting
+    /// diagnostics from other representations.
+    pub fn new(severity: Severity, message: impl Into<String>) -> Diagnostic {
+        Diagnostic(imp::Diagnostic::new(severity).with_message(message))
+    }
+
     pub fn bug(message: impl Into<String>, primary_label: Label) -> Diagnostic {
         Diagnostic(
             imp::Diagnostic::bug()

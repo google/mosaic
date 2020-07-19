@@ -133,7 +133,7 @@ pub(crate) fn process_rs_input(
     sess: &Session,
     index: &libclang::Index,
     input_path: &Path,
-) -> io::Result<Outcome<Vec<libclang::ModuleContext>>> {
+) -> io::Result<Outcome<Vec<(libclang::ModuleContext, libclang::ParseErrors)>>> {
     let mut content = String::new();
     File::open(input_path)?.read_to_string(&mut content)?;
 
@@ -173,10 +173,9 @@ pub(crate) fn process_rs_input(
                 continue;
             }
         };
-        match load_cc_module(sess, index, input_path, &cc_use, file_id) {
-            Ok(module) => cc_modules.push(module),
-            Err(err) => errs.append(err.into()),
-        }
+        let module_id = libclang::ModuleId::new(cc_modules.len() as _);
+        let module = load_cc_module(sess, index, input_path, &cc_use, file_id, module_id);
+        cc_modules.push(module);
     }
 
     Ok(Outcome::from_parts(cc_modules, errs))
@@ -188,15 +187,19 @@ fn load_cc_module(
     rs_src_path: &Path,
     cc_use: &CcUse,
     file_id: FileId,
-) -> Result<libclang::ModuleContext, libclang::SourceError> {
+    module_id: libclang::ModuleId,
+) -> (libclang::ModuleContext, libclang::ParseErrors) {
     let paths = cc_use
         .cc_paths
         .iter()
         .map(|path| (path.into(), span(&sess.db, file_id, path.span())))
         .collect();
-    Ok(libclang::parse_with(sess, index, paths, |index| {
+    libclang::parse_with(sess, index, module_id, paths, |index| {
         let line = cc_use.header.span.start().line;
         let src = if cc_use.header.is_system {
+            // TODO: This line directive doesn't have the intended effect. We can either figure
+            // out a way to use the "presumed location" libclang gives us, or find a way to present
+            // a better error ourselves.
             format!("#line {}\n#include <{}>", line, cc_use.header.path)
         } else {
             format!("#line {}\n#include \"{}\"", line, cc_use.header.path)
@@ -204,9 +207,9 @@ fn load_cc_module(
         // Use the rust source as the path so it shows up in "not found" errors
         let mut parser = libclang::configure(index.parser(rs_src_path));
         let unsaved = clang::Unsaved::new(rs_src_path, src);
-        // TODO don't unwrap
+        // unwrap is okay because we know the "file" exists.
         parser.unsaved(&[unsaved]).parse().unwrap()
-    }))
+    })
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
@@ -232,6 +235,7 @@ fn span(db: &impl SourceFileCache, file_id: FileId, span: Span) -> diagnostics::
 fn error(db: &impl SourceFileCache, file_id: FileId, input: syn::Error) -> Diagnostics {
     Diagnostics::build(|errs| {
         for err in input {
+            // For now we duplicate the error message as both the header and label text.
             errs.add(Diagnostic::error(
                 err.to_string(),
                 span(db, file_id, err.span()).label(err.to_string()),

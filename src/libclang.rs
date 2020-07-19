@@ -21,7 +21,7 @@ use std::sync::Arc;
 mod db;
 mod index;
 
-pub(crate) use clang::SourceError;
+use codespan_reporting::diagnostic::Severity;
 pub(crate) use db::{
     set_ast, AstContext, AstContextStorage, AstMethods, AstMethodsStorage, Index, ModuleContext,
 };
@@ -55,7 +55,7 @@ impl<T: Hash + Eq + Clone, Id: salsa::InternKey + Copy> Interner<T, Id> {
     }
 }
 
-intern_key!(ModuleId);
+intern_key!(pub ModuleId);
 intern_key!(LocalFileId);
 intern_key!(EntityId);
 intern_key!(TypeId);
@@ -81,8 +81,6 @@ impl SourceFile {
 #[allow(dead_code)]
 struct ModuleContextInner<'tu> {
     root: clang::Entity<'tu>,
-    // TODO do something with these (and we don't have to store them)
-    diagnostics: Vec<clang::diagnostic::Diagnostic<'tu>>,
     import_paths: Vec<(Path, Span)>,
 
     files: Interner<source::File<'tu>, LocalFileId>,
@@ -94,10 +92,13 @@ struct ModuleContextInner<'tu> {
 }
 
 impl<'tu> ModuleContextInner<'tu> {
-    pub fn new(tu: &'tu TranslationUnit<'tu>, imports: Vec<(Path, Span)>) -> Self {
+    pub fn new(
+        _db: &impl SourceFileCache,
+        tu: &'tu TranslationUnit<'tu>,
+        imports: Vec<(Path, Span)>,
+    ) -> Self {
         ModuleContextInner {
             root: tu.get_entity(),
-            diagnostics: tu.get_diagnostics(),
             import_paths: imports,
 
             files: Interner::new(),
@@ -122,25 +123,34 @@ pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
     db::Index::new(clang, false, false)
 }
 
-pub(crate) fn parse(sess: &Session, index: &Index, filename: &path::Path) -> ModuleContext {
-    parse_with(sess, index, vec![], |index| {
+pub(crate) fn parse(
+    sess: &Session,
+    index: &Index,
+    module_id: ModuleId,
+    filename: &path::Path,
+) -> (ModuleContext, ParseErrors) {
+    parse_with(sess, index, module_id, vec![], |index| {
         let parser = index.parser(filename);
         configure(parser).parse().unwrap()
     })
 }
 
 pub(crate) fn parse_with(
-    _sess: &Session,
+    sess: &Session,
     index: &Index,
+    module_id: ModuleId,
     imports: Vec<(Path, Span)>,
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
-) -> db::ModuleContext {
+) -> (ModuleContext, ParseErrors) {
     let tu = index.clone().parse_with(parse_fn);
-    db::ModuleContext::new(tu, imports)
+    let ctx = db::ModuleContext::new(&sess.db, tu, imports);
+    (ctx, ParseErrors(module_id))
 }
 
 pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
     parser.skip_function_bodies(true).arguments(&[
+        "-x",
+        "c++",
         "-std=c++17",
         "-isysroot",
         "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
@@ -148,10 +158,63 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
     parser
 }
 
-impl From<clang::SourceError> for Diagnostics {
-    fn from(_: clang::SourceError) -> Self {
-        todo!()
+/// Type that represents the clang diagnostics for a particular parse.
+///
+/// These can be resolved with `to_diagnostics()`.
+pub struct ParseErrors(ModuleId);
+impl ParseErrors {
+    pub fn to_diagnostics(self, db: &(impl AstContext + SourceFileCache)) -> Diagnostics {
+        db::with_ast_module(db, self.0, |tu, ast| {
+            Diagnostics::build(|errs| {
+                for err in tu.get_diagnostics() {
+                    if let Some(err) = convert_error(db, self.0, ast, err) {
+                        errs.add(err);
+                    }
+                }
+            })
+        })
     }
+}
+
+fn convert_error<'tu>(
+    db: &impl SourceFileCache,
+    mdl: ModuleId,
+    ast: &ModuleContextInner<'tu>,
+    err: clang::diagnostic::Diagnostic<'tu>,
+) -> Option<Diagnostic> {
+    use clang::diagnostic::Severity::*;
+    let severity = match err.get_severity() {
+        Ignored => return None,
+        Note => Severity::Note,
+        Warning => Severity::Warning,
+        Error => Severity::Error,
+        Fatal => Severity::Error,
+    };
+
+    let mut labels: Vec<crate::diagnostics::Label> = err
+        .get_ranges()
+        .iter()
+        .flat_map(|range| {
+            maybe_span_from_range(db, mdl, ast, Some(*range)).map(|span| span.label_no_message())
+        })
+        .collect();
+
+    // TODO: Fix invariant lifetime in libclang API :'((
+    let err = &err;
+    let err: &'tu clang::diagnostic::Diagnostic<'tu> = unsafe { std::mem::transmute(err) };
+
+    for child_err in err.get_children() {
+        // TODO: Should be marked secondary
+        assert!(child_err.get_children().is_empty());
+        for range in child_err.get_ranges() {
+            if let Some(span) = maybe_span_from_range(db, mdl, ast, Some(range)) {
+                labels.push(span.label(child_err.get_text()));
+            }
+        }
+    }
+
+    let diag = Diagnostic::new(severity, err.get_text());
+    Some(diag.with_labels(labels))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -601,7 +664,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
 }
 
 fn span<'tu>(
-    db: &impl AstMethods,
+    db: &impl SourceFileCache,
     mdl: ModuleId,
     ast: &ModuleContextInner<'tu>,
     ent: Entity<'tu>,
@@ -634,6 +697,7 @@ fn maybe_span_from_range<'tu>(
     };
     Some(Span::new(
         db.intern_source_file(SourceFileKind::Cc(source)),
+        // TODO this is wrong! char offset instead of byte offsets...
         start.offset,
         end.offset,
     ))

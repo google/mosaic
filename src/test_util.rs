@@ -1,5 +1,5 @@
 use crate::ir::cc::RsIr;
-use crate::{codegen, ir, libclang, Session};
+use crate::{codegen, diagnostics::Outcome, ir, libclang, Session};
 use clang::{self, TranslationUnit, Unsaved};
 use lazy_static::lazy_static;
 use pretty_assertions::assert_eq;
@@ -74,12 +74,13 @@ pub(crate) fn parse_and_lower(
     assert!(!sess.diags.has_errors()); // TODO has_diags()
 
     let index = libclang::create_index_with(CLANG.clone());
-    let ast = libclang::parse_with(&sess, &index, vec![], |index| parse(index, src));
+    let module_id = libclang::ModuleId::new(0);
+    let (ast, errs) =
+        libclang::parse_with(&sess, &index, module_id, vec![], |index| parse(index, src));
     let (rust_ir, errs) = libclang::set_ast(&mut sess.db, vec![ast], |db| {
-        let rs_ir = db.rs_bindings();
-        let (mdl, errs) = rs_ir.to_ref().split();
-        (mdl.clone(), errs.clone())
-    });
+        Outcome::from_parts((), errs.to_diagnostics(db)).then(|_| Outcome::clone(&db.rs_bindings()))
+    })
+    .split();
     assert_eq!(
         expected,
         errs.iter().map(|diag| diag.message()).collect::<Vec<_>>(),

@@ -28,8 +28,8 @@ use structopt::StructOpt;
 use io::Write;
 
 #[salsa::database(
+    libclang::AstContextStorage,
     libclang::AstMethodsStorage,
-    diagnostics::db::SourceFileInternerStorage,
     diagnostics::db::SourceFileCacheStorage,
     ir::IrMethodsStorage,
     ir::cc::RsIrStorage
@@ -51,7 +51,7 @@ impl SourceFileKind {
         }
     }
 }
-pub trait SourceFileLookup: libclang::AstMethods {}
+pub trait SourceFileLookup: libclang::AstContext {}
 impl SourceFileLookup for Database {}
 
 impl salsa::Database for Database {

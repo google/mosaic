@@ -1,5 +1,5 @@
 use crate::{
-    diagnostics::{err, ok, Diagnostic, Diagnostics, Outcome, Span},
+    diagnostics::{db::SourceFileCache, err, ok, Diagnostic, Diagnostics, Outcome, Span},
     ir::cc::{self, *},
     ir::{DefKind, Module},
     // util::DisplayName,
@@ -22,7 +22,9 @@ mod db;
 mod index;
 
 pub(crate) use clang::SourceError;
-pub(crate) use db::{set_ast, AstMethods, AstMethodsStorage, Index, ModuleContext};
+pub(crate) use db::{
+    set_ast, AstContext, AstContextStorage, AstMethods, AstMethodsStorage, Index, ModuleContext,
+};
 
 struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
 struct InternerInner<T: Hash + Eq, Id> {
@@ -64,7 +66,7 @@ pub struct SourceFile {
     file: LocalFileId,
 }
 impl SourceFile {
-    pub(crate) fn get_name_and_contents(&self, db: &impl db::AstMethods) -> (String, String) {
+    pub(crate) fn get_name_and_contents(&self, db: &impl db::AstContext) -> (String, String) {
         db::with_ast_module(db, self.module, |_, ctx| {
             let file = ctx.files.lookup(self.file);
             (
@@ -608,7 +610,7 @@ fn span<'tu>(
 }
 
 fn maybe_span_from_range<'tu>(
-    db: &impl AstMethods,
+    db: &impl SourceFileCache,
     module: ModuleId,
     ast: &ModuleContextInner<'tu>,
     range: Option<SourceRange<'tu>>,

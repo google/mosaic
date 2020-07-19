@@ -38,18 +38,14 @@ pub mod db {
         }
     }
 
-    /// Interns [`SourceFileKind`][crate::SourceFileKind].
+    /// Caches sources for use in diagnostics.
     ///
     /// This trait exists to break a cycle. You may want [`SourceFileCache`].
-    #[salsa::query_group(SourceFileInternerStorage)]
-    pub trait SourceFileInterner {
+    #[salsa::query_group(SourceFileCacheStorage)]
+    pub trait SourceFileCache: crate::SourceFileLookup {
         #[salsa::interned]
         fn intern_source_file(&self, file: crate::SourceFileKind) -> FileId;
-    }
 
-    /// Caches sources for use in diagnostics.
-    #[salsa::query_group(SourceFileCacheStorage)]
-    pub trait SourceFileCache: SourceFileInterner + crate::SourceFileLookup {
         /// Cache for [`BasicFile`]. Should not be used outside of the `diagnostics` module.
         fn basic_file(&self, id: FileId) -> Arc<BasicFile>;
     }

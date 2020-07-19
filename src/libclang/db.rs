@@ -5,7 +5,7 @@
 
 use super::{ModuleContextInner, ModuleId, TypeId};
 use crate::{
-    diagnostics::{db::SourceFileInterner, Outcome},
+    diagnostics::{db::SourceFileCache, Outcome},
     ir,
 };
 use clang::TranslationUnit;
@@ -15,11 +15,14 @@ use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-#[salsa::query_group(AstMethodsStorage)]
-pub trait AstMethods: SourceFileInterner {
+#[salsa::query_group(AstContextStorage)]
+pub trait AstContext {
     #[salsa::dependencies]
     fn ast_context(&self) -> ();
+}
 
+#[salsa::query_group(AstMethodsStorage)]
+pub trait AstMethods: AstContext + SourceFileCache {
     fn cc_module_ids(&self) -> Vec<ModuleId>;
     fn cc_ir_from_src(&self, mdl: ModuleId) -> Arc<Outcome<ir::Module>>;
 
@@ -33,7 +36,7 @@ pub trait AstMethods: SourceFileInterner {
     fn intern_cc_fn(&self, func: Arc<Outcome<ir::cc::Function>>) -> ir::cc::FunctionId;
 }
 
-fn ast_context(db: &(impl AstMethods + salsa::Database)) {
+fn ast_context(db: &(impl AstContext + salsa::Database)) {
     db.salsa_runtime()
         .report_synthetic_read(salsa::Durability::LOW);
 }
@@ -71,7 +74,7 @@ fn cc_module_ids(db: &impl AstMethods) -> Vec<ModuleId> {
 }
 
 pub(super) fn with_ast_module<R>(
-    db: &impl AstMethods,
+    db: &impl AstContext,
     mdl: ModuleId,
     f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ ModuleContextInner<'tu>) -> R,
 ) -> R {

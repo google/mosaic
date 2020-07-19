@@ -1,7 +1,7 @@
 use crate::{
     diagnostics::{
         self,
-        db::{FileId, SourceFileCache, SourceFileInterner},
+        db::{FileId, SourceFileCache},
         Diagnostic, Diagnostics, Outcome,
     },
     ir, libclang, Session, SourceFileKind,

@@ -1,16 +1,22 @@
+//! This module parses C++ using libclang and creates the `ir::cc` IR.
+
+mod db;
+mod diagnostics;
+mod index;
+
 use crate::{
     diagnostics::{db::SourceFileCache, err, ok, Diagnostic, Diagnostics, Outcome, Span},
     ir::cc::{self, *},
     ir::{DefKind, Module},
     // util::DisplayName,
     Session,
-    SourceFileKind,
 };
 use clang::{
-    self, source, source::SourceRange, Accessibility, Clang, Entity, EntityKind, EntityVisitResult,
-    Parser, TranslationUnit, Type, TypeKind,
+    self, source, Accessibility, Clang, Entity, EntityKind, EntityVisitResult, Parser,
+    TranslationUnit, Type, TypeKind,
 };
 use core::hash::Hasher;
+use diagnostics::mk_span;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
@@ -18,13 +24,10 @@ use std::hash::Hash;
 use std::path;
 use std::sync::Arc;
 
-mod db;
-mod index;
-
-use codespan_reporting::diagnostic::Severity;
 pub(crate) use db::{
     set_ast, AstContext, AstContextStorage, AstMethods, AstMethodsStorage, Index, ModuleContext,
 };
+pub(crate) use diagnostics::ParseErrors;
 
 struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
 struct InternerInner<T: Hash + Eq, Id> {
@@ -78,12 +81,13 @@ impl SourceFile {
 }
 
 /// Context for a given translation unit, used to resolve queries.
-#[allow(dead_code)]
 struct ModuleContextInner<'tu> {
+    #[allow(dead_code)]
     root: clang::Entity<'tu>,
     import_paths: Vec<(Path, Span)>,
 
     files: Interner<source::File<'tu>, LocalFileId>,
+    #[allow(dead_code)]
     entities: Interner<Entity<'tu>, EntityId>,
 
     //def_to_entity: HashMap<Def, Entity<'tu>>,
@@ -158,67 +162,8 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
     parser
 }
 
-/// Type that represents the clang diagnostics for a particular parse.
-///
-/// These can be resolved with `to_diagnostics()`.
-pub struct ParseErrors(ModuleId);
-impl ParseErrors {
-    pub fn to_diagnostics(self, db: &(impl AstContext + SourceFileCache)) -> Diagnostics {
-        db::with_ast_module(db, self.0, |tu, ast| {
-            Diagnostics::build(|errs| {
-                for err in tu.get_diagnostics() {
-                    if let Some(err) = convert_error(db, self.0, ast, err) {
-                        errs.add(err);
-                    }
-                }
-            })
-        })
-    }
-}
-
-fn convert_error<'tu>(
-    db: &impl SourceFileCache,
-    mdl: ModuleId,
-    ast: &ModuleContextInner<'tu>,
-    err: clang::diagnostic::Diagnostic<'tu>,
-) -> Option<Diagnostic> {
-    use clang::diagnostic::Severity::*;
-    let severity = match err.get_severity() {
-        Ignored => return None,
-        Note => Severity::Note,
-        Warning => Severity::Warning,
-        Error => Severity::Error,
-        Fatal => Severity::Error,
-    };
-
-    let mut labels: Vec<crate::diagnostics::Label> = err
-        .get_ranges()
-        .iter()
-        .flat_map(|range| {
-            maybe_span_from_range(db, mdl, ast, Some(*range)).map(|span| span.label_no_message())
-        })
-        .collect();
-
-    // TODO: Fix invariant lifetime in libclang API :'((
-    let err = &err;
-    let err: &'tu clang::diagnostic::Diagnostic<'tu> = unsafe { std::mem::transmute(err) };
-
-    for child_err in err.get_children() {
-        // TODO: Should be marked secondary
-        assert!(child_err.get_children().is_empty());
-        for range in child_err.get_ranges() {
-            if let Some(span) = maybe_span_from_range(db, mdl, ast, Some(range)) {
-                labels.push(span.label(child_err.get_text()));
-            }
-        }
-    }
-
-    let diag = Diagnostic::new(severity, err.get_text());
-    Some(diag.with_labels(labels))
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ExportKind<'tu> {
+enum ExportKind<'tu> {
     Decl(Entity<'tu>),
     Type(HashType<'tu>),
     TemplateType(Entity<'tu>),
@@ -659,48 +604,8 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
     }
 
     fn span(&self, ent: Entity<'tu>) -> Span {
-        span(self.db, self.mdl, self.ast, ent)
+        mk_span(self.db, self.mdl, self.ast, ent)
     }
-}
-
-fn span<'tu>(
-    db: &impl SourceFileCache,
-    mdl: ModuleId,
-    ast: &ModuleContextInner<'tu>,
-    ent: Entity<'tu>,
-) -> Span {
-    maybe_span_from_range(db, mdl, ast, ent.get_range()).expect("TODO dummy span")
-}
-
-fn maybe_span_from_range<'tu>(
-    db: &impl SourceFileCache,
-    module: ModuleId,
-    ast: &ModuleContextInner<'tu>,
-    range: Option<SourceRange<'tu>>,
-) -> Option<Span> {
-    let range = match range {
-        Some(range) => range,
-        None => return None,
-    };
-    let (start, end) = (
-        range.get_start().get_file_location(),
-        range.get_end().get_file_location(),
-    );
-    let file = match (start.file, end.file) {
-        (Some(f), Some(g)) if f == g => f,
-        _ => return None,
-    };
-    let file_id = ast.files.intern(file);
-    let source = SourceFile {
-        module,
-        file: file_id,
-    };
-    Some(Span::new(
-        db.intern_source_file(SourceFileKind::Cc(source)),
-        // TODO this is wrong! char offset instead of byte offsets...
-        start.offset,
-        end.offset,
-    ))
 }
 
 trait Lower<'ctx, 'tu> {

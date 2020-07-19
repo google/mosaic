@@ -3,7 +3,6 @@
 mod diagnostics;
 mod index;
 mod lowering;
-mod rent;
 
 use crate::{
     diagnostics::{db::SourceFileCache, Outcome, Span},
@@ -21,20 +20,14 @@ use std::hash::Hash;
 use std::path;
 use std::sync::Arc;
 
-pub(crate) use self::rent::{Index, ModuleContext};
-pub(crate) use diagnostics::ParseErrors;
-
-intern_key!(pub ModuleId);
-intern_key!(LocalFileId);
-intern_key!(EntityId);
-intern_key!(TypeId);
+pub(crate) use diagnostics::{ParseErrors, SourceFile};
 
 pub(crate) fn create_index() -> Index {
     create_index_with(Arc::new(Clang::new().unwrap()))
 }
 
 pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
-    rent::Index::new(clang, false, false)
+    Index::new(clang, false, false)
 }
 
 pub(crate) fn parse(
@@ -57,7 +50,7 @@ pub(crate) fn parse_with(
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
 ) -> (ModuleContext, ParseErrors) {
     let tu = index.clone().parse_with(parse_fn);
-    let ctx = rent::ModuleContext::new(&sess.db, tu, imports);
+    let ctx = ModuleContext::new(&sess.db, tu, imports);
     (ctx, ParseErrors(module_id))
 }
 
@@ -70,6 +63,40 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
         "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
     ]);
     parser
+}
+
+intern_key!(pub ModuleId);
+thread_local! {
+    // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
+    static AST_CONTEXT: RefCell<Option<Vec<ModuleContext>>> = RefCell::new(None);
+}
+
+pub(crate) fn set_ast<R>(
+    db: &mut crate::Database,
+    ctx: Vec<ModuleContext>,
+    f: impl FnOnce(&crate::Database) -> R,
+) -> R {
+    use salsa::Database;
+    db.query_mut(AstContextQuery).invalidate(&());
+    AST_CONTEXT.with(|cx| *cx.borrow_mut() = Some(ctx));
+    let res = f(db);
+    AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
+    res
+}
+
+fn with_ast_module<R>(
+    db: &impl AstContext,
+    mdl: ModuleId,
+    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ ModuleContextInner<'tu>) -> R,
+) -> R {
+    // Report that we're reading the ast context.
+    db.ast_context();
+    AST_CONTEXT.with(move |ctx| {
+        ctx.borrow_mut()
+            .as_mut()
+            .expect("with_ast_module called with no ast defined")[mdl.0.as_usize()]
+        .with(f)
+    })
 }
 
 #[salsa::query_group(AstContextStorage)]
@@ -112,56 +139,43 @@ fn cc_module_ids(db: &impl AstMethods) -> Vec<ModuleId> {
     })
 }
 
-thread_local! {
-    // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
-    static AST_CONTEXT: RefCell<Option<Vec<ModuleContext>>> = RefCell::new(None);
-}
+#[derive(Clone)]
+pub struct Index(Arc<rent::Index>);
+impl Index {
+    fn new(clang: Arc<clang::Clang>, exclude: bool, diagnostics: bool) -> Self {
+        Index(Arc::new(rent::Index::new(clang, |cl| {
+            clang::Index::new(&*cl, exclude, diagnostics)
+        })))
+    }
 
-pub(crate) fn set_ast<R>(
-    db: &mut crate::Database,
-    ctx: Vec<ModuleContext>,
-    f: impl FnOnce(&crate::Database) -> R,
-) -> R {
-    use salsa::Database;
-    db.query_mut(AstContextQuery).invalidate(&());
-    AST_CONTEXT.with(|cx| *cx.borrow_mut() = Some(ctx));
-    let res = f(db);
-    AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
-    res
-}
-
-fn with_ast_module<R>(
-    db: &impl AstContext,
-    mdl: ModuleId,
-    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ ModuleContextInner<'tu>) -> R,
-) -> R {
-    // Report that we're reading the ast context.
-    db.ast_context();
-    AST_CONTEXT.with(move |ctx| {
-        ctx.borrow_mut()
-            .as_mut()
-            .expect("with_ast_module called with no ast defined")[mdl.0.as_usize()]
-        .with(f)
-    })
-}
-
-/// A C++ source file.
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub struct SourceFile {
-    module: ModuleId,
-    file: LocalFileId,
-}
-impl SourceFile {
-    pub(crate) fn get_name_and_contents(&self, db: &impl AstContext) -> (String, String) {
-        with_ast_module(db, self.module, |_, ctx| {
-            let file = ctx.files.lookup(self.file);
-            (
-                file.get_path().as_path().to_string_lossy().into(),
-                file.get_contents().unwrap_or_default(),
-            )
-        })
+    fn parse_with(
+        self,
+        parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
+    ) -> AstTu {
+        AstTu(Arc::new(rent::Tu::new(self.0, |rent_index| {
+            parse_fn(&rent_index.index)
+        })))
     }
 }
+
+pub struct ModuleContext(rent::ModuleContext);
+impl ModuleContext {
+    fn new(db: &impl SourceFileCache, tu: AstTu, imports: Vec<(Path, Span)>) -> Self {
+        ModuleContext(rent::ModuleContext::new(tu.0, |tu| {
+            ModuleContextInner::new(db, tu.tu, imports)
+        }))
+    }
+    fn with<R>(
+        &mut self,
+        f: impl for<'tu> FnOnce(&'tu clang::TranslationUnit<'tu>, &ModuleContextInner<'tu>) -> R,
+    ) -> R {
+        self.0.rent_all(|r| f(r.tu.tu, r.result))
+    }
+}
+
+intern_key!(LocalFileId);
+intern_key!(EntityId);
+intern_key!(TypeId);
 
 /// Context for a given translation unit, used to resolve queries.
 ///
@@ -175,14 +189,13 @@ struct ModuleContextInner<'tu> {
     files: Interner<source::File<'tu>, LocalFileId>,
     #[allow(dead_code)]
     entities: Interner<Entity<'tu>, EntityId>,
-
+    types: Interner<HashType<'tu>, TypeId>,
     //def_to_entity: HashMap<Def, Entity<'tu>>,
     //entity_to_def: HashMap<Entity<'tu>, Def>,
-    types: Interner<HashType<'tu>, TypeId>,
 }
 
 impl<'tu> ModuleContextInner<'tu> {
-    pub fn new(
+    fn new(
         _db: &impl SourceFileCache,
         tu: &'tu TranslationUnit<'tu>,
         imports: Vec<(Path, Span)>,
@@ -193,10 +206,9 @@ impl<'tu> ModuleContextInner<'tu> {
 
             files: Interner::new(),
             entities: Interner::new(),
-
+            types: Interner::new(),
             //def_to_entity: HashMap::default(),
             //entity_to_def: HashMap::default(),
-            types: Interner::new(),
         }
     }
 
@@ -239,5 +251,65 @@ pub struct HashType<'tu>(Type<'tu>);
 impl<'tu> Hash for HashType<'tu> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         Hash::hash(&self.0.get_declaration(), state)
+    }
+}
+
+// All of the clang types have a lifetime parameter, but salsa doesn't support
+// those today. Work around this with some structs that contain an Arc to the
+// thing they borrow.
+rental! {
+    mod rent {
+        use super::*;
+
+        #[rental(covariant, debug)]
+        pub(super) struct Index {
+            clang: Arc<clang::Clang>,
+            index: clang::Index<'clang>,
+        }
+
+        #[rental(debug)]
+        pub(super) struct Tu {
+            #[subrental = 2]
+            index: Arc<Index>,
+            tu: clang::TranslationUnit<'index_1>,
+        }
+
+        #[rental(clone, debug)]
+        pub(super) struct File {
+            #[subrental = 3]
+            tu: Arc<Tu>,
+            file: clang::source::File<'tu_2>,
+        }
+
+        #[rental(clone, debug)]
+        pub(super) struct Entity {
+            #[subrental = 3]
+            tu: Arc<Tu>,
+            ent: clang::Entity<'tu_2>,
+        }
+
+        #[rental]
+        pub(super) struct ModuleContext {
+            #[subrental = 3]
+            tu: Arc<Tu>,
+            result: ModuleContextInner<'tu_2>,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AstTu(Arc<rent::Tu>);
+
+#[derive(Clone, Debug)]
+struct AstFile(Arc<rent::File>);
+impl PartialEq for AstFile {
+    fn eq(&self, other: &AstFile) -> bool {
+        self.0.rent(|f1| other.0.rent(|f2| f1 == f2))
+    }
+}
+impl Eq for AstFile {}
+impl Hash for AstFile {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.rent(|f| f.hash(state));
     }
 }

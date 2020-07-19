@@ -1,11 +1,29 @@
 //! Utilities for converting from clang diagnostics and source objects to their
 //! [`crate::diagnostics`] equivalents.
 
-use super::{AstContext, ModuleContextInner, ModuleId, SourceFile};
+use super::{with_ast_module, AstContext, LocalFileId, ModuleContextInner, ModuleId};
 use crate::diagnostics::{db::SourceFileCache, Diagnostic, Diagnostics, Span};
 use crate::SourceFileKind;
 use clang::{source::SourceRange, Entity};
 use codespan_reporting::diagnostic::Severity;
+
+/// A C++ source file.
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub struct SourceFile {
+    module: ModuleId,
+    file: LocalFileId,
+}
+impl SourceFile {
+    pub(crate) fn get_name_and_contents(&self, db: &impl AstContext) -> (String, String) {
+        with_ast_module(db, self.module, |_, ctx| {
+            let file = ctx.files.lookup(self.file);
+            (
+                file.get_path().as_path().to_string_lossy().into(),
+                file.get_contents().unwrap_or_default(),
+            )
+        })
+    }
+}
 
 /// Type that represents the clang diagnostics for a particular parse.
 ///
@@ -14,7 +32,7 @@ use codespan_reporting::diagnostic::Severity;
 pub struct ParseErrors(pub(super) ModuleId);
 impl ParseErrors {
     pub fn to_diagnostics(self, db: &(impl AstContext + SourceFileCache)) -> Diagnostics {
-        super::with_ast_module(db, self.0, |tu, ast| {
+        with_ast_module(db, self.0, |tu, ast| {
             Diagnostics::build(|errs| {
                 for err in tu.get_diagnostics() {
                     if let Some(err) = convert_error(db, self.0, ast, err) {

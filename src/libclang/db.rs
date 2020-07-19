@@ -26,7 +26,7 @@ pub trait AstMethods: AstContext + SourceFileCache {
     fn cc_module_ids(&self) -> Vec<ModuleId>;
     fn cc_ir_from_src(&self, mdl: ModuleId) -> Arc<Outcome<ir::Module>>;
 
-    #[salsa::invoke(crate::libclang::lower_ty)]
+    #[salsa::invoke(super::lowering::lower_ty)]
     fn type_of(&self, mdl: ModuleId, id: TypeId) -> Outcome<ir::cc::Ty>;
 
     #[salsa::interned]
@@ -42,7 +42,7 @@ fn ast_context(db: &(impl AstContext + salsa::Database)) {
 }
 
 fn cc_ir_from_src(db: &impl AstMethods, mdl: ModuleId) -> Arc<Outcome<ir::Module>> {
-    Arc::new(super::lower_ast(db, mdl))
+    Arc::new(super::lowering::lower_ast(db, mdl))
 }
 
 thread_local! {

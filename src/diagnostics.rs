@@ -38,18 +38,22 @@ pub mod db {
         }
     }
 
+    /// Interns [`SourceFileKind`][crate::SourceFileKind].
+    ///
+    /// This trait exists to break a cycle. You may want [`SourceFileCache`].
     #[salsa::query_group(SourceFileInternerStorage)]
     pub trait SourceFileInterner {
         #[salsa::interned]
         fn intern_source_file(&self, file: crate::SourceFileKind) -> FileId;
     }
 
-    /// Cache for [`BasicFile`]. Should not be used outside of the `diagnostics` module.
-    #[salsa::query_group(BasicFileCacheStorage)]
-    pub trait BasicFileCache: SourceFileInterner + crate::SourceFileLookup {
+    /// Caches sources for use in diagnostics.
+    #[salsa::query_group(SourceFileCacheStorage)]
+    pub trait SourceFileCache: SourceFileInterner + crate::SourceFileLookup {
+        /// Cache for [`BasicFile`]. Should not be used outside of the `diagnostics` module.
         fn basic_file(&self, id: FileId) -> Arc<BasicFile>;
     }
-    fn basic_file(db: &impl BasicFileCache, id: FileId) -> Arc<BasicFile> {
+    fn basic_file(db: &impl SourceFileCache, id: FileId) -> Arc<BasicFile> {
         let (name, contents) = db.lookup_intern_source_file(id).get_name_and_contents(db);
         Arc::new(BasicFile(SimpleFile::new(name.into(), contents.into())))
     }
@@ -70,8 +74,8 @@ pub mod db {
     impl Eq for BasicFile {}
 
     /// Adapter between salsa, BasicFile, and the Files trait.
-    pub(super) struct FilesWrapper<'db, DB: BasicFileCache>(pub(super) &'db DB);
-    impl<'a, DB: BasicFileCache> codespan_reporting::files::Files<'a> for FilesWrapper<'a, DB> {
+    pub(super) struct FilesWrapper<'db, DB: SourceFileCache>(pub(super) &'db DB);
+    impl<'a, DB: SourceFileCache> codespan_reporting::files::Files<'a> for FilesWrapper<'a, DB> {
         type FileId = FileId;
         type Source = Arc<str>;
         type Name = Arc<str>;
@@ -112,7 +116,7 @@ impl Span {
     }
 
     pub fn from_location(
-        db: &impl db::BasicFileCache,
+        db: &impl db::SourceFileCache,
         file_id: FileId,
         start: Location,
         end: Location,
@@ -269,7 +273,7 @@ impl Diagnostic {
         )
     }
 
-    pub fn emit(self, db: &'_ impl db::BasicFileCache, ctx: &DiagnosticsCtx) {
+    pub fn emit(self, db: &'_ impl db::SourceFileCache, ctx: &DiagnosticsCtx) {
         let CtxInner { mode, counts, .. } = &mut *ctx.0.borrow_mut();
         match self.0.severity {
             imp::Severity::Bug => counts.bugs += 1,
@@ -364,7 +368,7 @@ impl Diagnostics {
         Arc::make_mut(&mut self.val).append(&mut other.into());
     }
 
-    pub fn emit(self, db: &impl db::BasicFileCache, ctx: &DiagnosticsCtx) {
+    pub fn emit(self, db: &impl db::SourceFileCache, ctx: &DiagnosticsCtx) {
         let diags: Vec<_> = self.into();
         for diag in diags {
             diag.emit(db, ctx);

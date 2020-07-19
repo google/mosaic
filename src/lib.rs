@@ -30,7 +30,7 @@ use io::Write;
 #[salsa::database(
     libclang::AstMethodsStorage,
     diagnostics::db::SourceFileInternerStorage,
-    diagnostics::db::BasicFileCacheStorage,
+    diagnostics::db::SourceFileCacheStorage,
     ir::IrMethodsStorage,
     ir::cc::RsIrStorage
 )]

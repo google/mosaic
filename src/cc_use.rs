@@ -1,12 +1,11 @@
 use crate::{
     diagnostics::{
         self,
-        db::{FileId, SourceFileInterner},
-        Diagnostics, Outcome,
+        db::{FileId, SourceFileCache, SourceFileInterner},
+        Diagnostic, Diagnostics, Outcome,
     },
     ir, libclang, Session, SourceFileKind,
 };
-use diagnostics::{db::BasicFileCache, Diagnostic};
 use proc_macro2::Span;
 use std::fs::File;
 use std::{
@@ -221,7 +220,7 @@ impl SourceFile {
     }
 }
 
-fn span(db: &impl BasicFileCache, file_id: FileId, span: Span) -> diagnostics::Span {
+fn span(db: &impl SourceFileCache, file_id: FileId, span: Span) -> diagnostics::Span {
     // In proc_macro2 the lines are 1-indexed and columns are 0-indexed, whereas in codespan they
     // are both 0-indexed.
     let start =
@@ -230,7 +229,7 @@ fn span(db: &impl BasicFileCache, file_id: FileId, span: Span) -> diagnostics::S
     diagnostics::Span::from_location(db, file_id, start, end)
 }
 
-fn error(db: &impl BasicFileCache, file_id: FileId, input: syn::Error) -> Diagnostics {
+fn error(db: &impl SourceFileCache, file_id: FileId, input: syn::Error) -> Diagnostics {
     Diagnostics::build(|errs| {
         for err in input {
             errs.add(Diagnostic::error(

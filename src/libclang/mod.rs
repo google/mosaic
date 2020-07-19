@@ -1,9 +1,9 @@
 //! This module parses C++ using libclang and creates the `ir::cc` IR.
 
-mod db;
 mod diagnostics;
 mod index;
 mod lowering;
+mod rent;
 
 use crate::{
     diagnostics::{db::SourceFileCache, Outcome, Span},
@@ -21,7 +21,7 @@ use std::hash::Hash;
 use std::path;
 use std::sync::Arc;
 
-pub(crate) use db::{Index, ModuleContext};
+pub(crate) use self::rent::{Index, ModuleContext};
 pub(crate) use diagnostics::ParseErrors;
 
 intern_key!(pub ModuleId);
@@ -34,7 +34,7 @@ pub(crate) fn create_index() -> Index {
 }
 
 pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
-    db::Index::new(clang, false, false)
+    rent::Index::new(clang, false, false)
 }
 
 pub(crate) fn parse(
@@ -57,7 +57,7 @@ pub(crate) fn parse_with(
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
 ) -> (ModuleContext, ParseErrors) {
     let tu = index.clone().parse_with(parse_fn);
-    let ctx = db::ModuleContext::new(&sess.db, tu, imports);
+    let ctx = rent::ModuleContext::new(&sess.db, tu, imports);
     (ctx, ParseErrors(module_id))
 }
 

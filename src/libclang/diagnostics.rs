@@ -1,7 +1,7 @@
 //! Utilities for converting from clang diagnostics and source objects to their
 //! [`crate::diagnostics`] equivalents.
 
-use super::{db, AstContext, ModuleContextInner, ModuleId, SourceFile};
+use super::{AstContext, ModuleContextInner, ModuleId, SourceFile};
 use crate::diagnostics::{db::SourceFileCache, Diagnostic, Diagnostics, Span};
 use crate::SourceFileKind;
 use clang::{source::SourceRange, Entity};
@@ -14,7 +14,7 @@ use codespan_reporting::diagnostic::Severity;
 pub struct ParseErrors(pub(super) ModuleId);
 impl ParseErrors {
     pub fn to_diagnostics(self, db: &(impl AstContext + SourceFileCache)) -> Diagnostics {
-        db::with_ast_module(db, self.0, |tu, ast| {
+        super::with_ast_module(db, self.0, |tu, ast| {
             Diagnostics::build(|errs| {
                 for err in tu.get_diagnostics() {
                     if let Some(err) = convert_error(db, self.0, ast, err) {

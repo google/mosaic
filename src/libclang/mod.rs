@@ -6,8 +6,11 @@ mod index;
 mod lowering;
 
 use crate::{
-    diagnostics::{db::SourceFileCache, Span},
-    ir::cc::{self, *},
+    diagnostics::{db::SourceFileCache, Outcome, Span},
+    ir::{
+        self,
+        cc::{self, *},
+    },
     Session,
 };
 use clang::{self, source, Clang, Entity, Parser, TranslationUnit, Type};
@@ -18,9 +21,7 @@ use std::hash::Hash;
 use std::path;
 use std::sync::Arc;
 
-pub(crate) use db::{
-    set_ast, AstContext, AstContextStorage, AstMethods, AstMethodsStorage, Index, ModuleContext,
-};
+pub(crate) use db::{Index, ModuleContext};
 pub(crate) use diagnostics::ParseErrors;
 
 intern_key!(pub ModuleId);
@@ -71,6 +72,79 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
     parser
 }
 
+#[salsa::query_group(AstContextStorage)]
+pub trait AstContext {
+    #[salsa::dependencies]
+    fn ast_context(&self) -> ();
+}
+
+#[salsa::query_group(AstMethodsStorage)]
+pub trait AstMethods: AstContext + SourceFileCache {
+    fn cc_module_ids(&self) -> Vec<ModuleId>;
+    fn cc_ir_from_src(&self, mdl: ModuleId) -> Arc<Outcome<ir::Module>>;
+
+    #[salsa::invoke(lowering::lower_ty)]
+    fn type_of(&self, mdl: ModuleId, id: TypeId) -> Outcome<ir::cc::Ty>;
+
+    #[salsa::interned]
+    fn intern_cc_struct(&self, st: ir::cc::Struct) -> ir::cc::StructId;
+
+    #[salsa::interned]
+    fn intern_cc_fn(&self, func: Arc<Outcome<ir::cc::Function>>) -> ir::cc::FunctionId;
+}
+
+fn ast_context(db: &(impl AstContext + salsa::Database)) {
+    db.salsa_runtime()
+        .report_synthetic_read(salsa::Durability::LOW);
+}
+
+fn cc_ir_from_src(db: &impl AstMethods, mdl: ModuleId) -> Arc<Outcome<ir::Module>> {
+    Arc::new(lowering::lower_ast(db, mdl))
+}
+
+fn cc_module_ids(db: &impl AstMethods) -> Vec<ModuleId> {
+    // Report that we're reading the ast context.
+    db.ast_context();
+    AST_CONTEXT.with(|ctx| {
+        (0..ctx.borrow().as_ref().unwrap().len())
+            .map(|id| ModuleId::new(id as u32))
+            .collect()
+    })
+}
+
+thread_local! {
+    // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
+    static AST_CONTEXT: RefCell<Option<Vec<ModuleContext>>> = RefCell::new(None);
+}
+
+pub(crate) fn set_ast<R>(
+    db: &mut crate::Database,
+    ctx: Vec<ModuleContext>,
+    f: impl FnOnce(&crate::Database) -> R,
+) -> R {
+    use salsa::Database;
+    db.query_mut(AstContextQuery).invalidate(&());
+    AST_CONTEXT.with(|cx| *cx.borrow_mut() = Some(ctx));
+    let res = f(db);
+    AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
+    res
+}
+
+fn with_ast_module<R>(
+    db: &impl AstContext,
+    mdl: ModuleId,
+    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ ModuleContextInner<'tu>) -> R,
+) -> R {
+    // Report that we're reading the ast context.
+    db.ast_context();
+    AST_CONTEXT.with(move |ctx| {
+        ctx.borrow_mut()
+            .as_mut()
+            .expect("with_ast_module called with no ast defined")[mdl.0.as_usize()]
+        .with(f)
+    })
+}
+
 /// A C++ source file.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct SourceFile {
@@ -78,8 +152,8 @@ pub struct SourceFile {
     file: LocalFileId,
 }
 impl SourceFile {
-    pub(crate) fn get_name_and_contents(&self, db: &impl db::AstContext) -> (String, String) {
-        db::with_ast_module(db, self.module, |_, ctx| {
+    pub(crate) fn get_name_and_contents(&self, db: &impl AstContext) -> (String, String) {
+        with_ast_module(db, self.module, |_, ctx| {
             let file = ctx.files.lookup(self.file);
             (
                 file.get_path().as_path().to_string_lossy().into(),
@@ -90,6 +164,9 @@ impl SourceFile {
 }
 
 /// Context for a given translation unit, used to resolve queries.
+///
+/// Code inside this module can use this struct. Outside the module we export [`ModuleContext`]
+/// which doesn't have the lifetime.
 struct ModuleContextInner<'tu> {
     #[allow(dead_code)]
     root: clang::Entity<'tu>,

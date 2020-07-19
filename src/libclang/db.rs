@@ -3,90 +3,12 @@
 //! Unfortunately, there's a lot of back-and-forth calling between the parent module and here, due
 //! to our need to wrap a lot of objects in rental types.
 
-use super::{ModuleContextInner, ModuleId, TypeId};
-use crate::{
-    diagnostics::{db::SourceFileCache, Outcome},
-    ir,
-};
-use clang::TranslationUnit;
-use core::cell::RefCell;
+use super::ModuleContextInner;
+use crate::diagnostics::db::SourceFileCache;
 use std::cmp::{Eq, PartialEq};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-
-#[salsa::query_group(AstContextStorage)]
-pub trait AstContext {
-    #[salsa::dependencies]
-    fn ast_context(&self) -> ();
-}
-
-#[salsa::query_group(AstMethodsStorage)]
-pub trait AstMethods: AstContext + SourceFileCache {
-    fn cc_module_ids(&self) -> Vec<ModuleId>;
-    fn cc_ir_from_src(&self, mdl: ModuleId) -> Arc<Outcome<ir::Module>>;
-
-    #[salsa::invoke(super::lowering::lower_ty)]
-    fn type_of(&self, mdl: ModuleId, id: TypeId) -> Outcome<ir::cc::Ty>;
-
-    #[salsa::interned]
-    fn intern_cc_struct(&self, st: ir::cc::Struct) -> ir::cc::StructId;
-
-    #[salsa::interned]
-    fn intern_cc_fn(&self, func: Arc<Outcome<ir::cc::Function>>) -> ir::cc::FunctionId;
-}
-
-fn ast_context(db: &(impl AstContext + salsa::Database)) {
-    db.salsa_runtime()
-        .report_synthetic_read(salsa::Durability::LOW);
-}
-
-fn cc_ir_from_src(db: &impl AstMethods, mdl: ModuleId) -> Arc<Outcome<ir::Module>> {
-    Arc::new(super::lowering::lower_ast(db, mdl))
-}
-
-thread_local! {
-    // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
-    static AST_CONTEXT: RefCell<Option<Vec<ModuleContext>>> = RefCell::new(None);
-}
-
-pub(crate) fn set_ast<R>(
-    db: &mut crate::Database,
-    ctx: Vec<ModuleContext>,
-    f: impl FnOnce(&crate::Database) -> R,
-) -> R {
-    use salsa::Database;
-    db.query_mut(AstContextQuery).invalidate(&());
-    AST_CONTEXT.with(|cx| *cx.borrow_mut() = Some(ctx));
-    let res = f(db);
-    AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
-    res
-}
-
-fn cc_module_ids(db: &impl AstMethods) -> Vec<ModuleId> {
-    // Report that we're reading the ast context.
-    db.ast_context();
-    AST_CONTEXT.with(|ctx| {
-        (0..ctx.borrow().as_ref().unwrap().len())
-            .map(|id| ModuleId::new(id as u32))
-            .collect()
-    })
-}
-
-pub(super) fn with_ast_module<R>(
-    db: &impl AstContext,
-    mdl: ModuleId,
-    f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ ModuleContextInner<'tu>) -> R,
-) -> R {
-    // Report that we're reading the ast context.
-    db.ast_context();
-    AST_CONTEXT.with(move |ctx| {
-        ctx.borrow_mut()
-            .as_mut()
-            .expect("with_ast_module called with no ast defined")[mdl.0.as_usize()]
-        .with(f)
-    })
-}
 
 // All of the clang types have a lifetime parameter, but salsa doesn't support
 // those today. Work around this with some structs that contain an Arc to the

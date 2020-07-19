@@ -3,7 +3,8 @@
 //! The entry point for all code in this module is lowering queries (declared in libclang::db).
 
 use super::{
-    db, diagnostics::span_for_entity, index, HashType, ModuleContextInner, ModuleId, TypeId,
+    diagnostics::span_for_entity, index, with_ast_module, AstMethods, HashType, ModuleContextInner,
+    ModuleId, TypeId,
 };
 use crate::{
     diagnostics::{err, ok, Diagnostic, Diagnostics, Outcome, Span},
@@ -17,15 +18,15 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::hash::Hash;
 
-pub(super) fn lower_ast(db: &impl db::AstMethods, mdl: ModuleId) -> Outcome<Module> {
-    db::with_ast_module(db, mdl, |tu, ast| -> Outcome<Module> {
+pub(super) fn lower_ast(db: &impl AstMethods, mdl: ModuleId) -> Outcome<Module> {
+    with_ast_module(db, mdl, |tu, ast| -> Outcome<Module> {
         let ctx = LowerCtx { db, mdl, ast };
         ctx.get_exports(tu).then(|exports| ctx.lower(&exports))
     })
 }
 
-pub(super) fn lower_ty(db: &impl db::AstMethods, mdl: ModuleId, ty: TypeId) -> Outcome<cc::Ty> {
-    db::with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
+pub(super) fn lower_ty(db: &impl AstMethods, mdl: ModuleId, ty: TypeId) -> Outcome<cc::Ty> {
+    with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
         ast.types.lookup(ty).0.lower(&LowerCtx { db, mdl, ast })
     })
 }
@@ -44,13 +45,13 @@ enum ExportKind<'tu> {
     TemplateType(Entity<'tu>),
 }
 
-struct LowerCtx<'ctx, 'tu, DB: db::AstMethods> {
+struct LowerCtx<'ctx, 'tu, DB: AstMethods> {
     db: &'ctx DB,
     mdl: ModuleId,
     ast: &'ctx ModuleContextInner<'tu>,
 }
 
-impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
+impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
     fn get_exports(&self, tu: &'tu TranslationUnit<'tu>) -> Outcome<Vec<Export<'tu>>> {
         // There are two kinds of exports currently supported: exports by the C++ header itself, in
         // the form of a `rust_export` namespace, and imports from cc_use! in Rust code. Handle
@@ -179,7 +180,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
     }
 }
 
-impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
+impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
     fn lower(&self, exports: &Vec<Export<'tu>>) -> Outcome<Module> {
         //let mut visitor = AstVisitor::new(&self);
         let mut outcome = ok(());
@@ -457,12 +458,12 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
 
 trait Lower<'ctx, 'tu> {
     type Output;
-    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty>;
+    fn lower<DB: AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty>;
 }
 
 impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
     type Output = Ty;
-    fn lower<DB: db::AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty> {
+    fn lower<DB: AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty> {
         use TypeKind::*;
         ok(match self.get_kind() {
             Void => Ty::Void,

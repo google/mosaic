@@ -1,7 +1,7 @@
 //! Adapts the libclang types for storage alongside the salsa database.
 //!
-//! Unfortunately, there's a lot of back-and-forth calling between libclang and here, due to our
-//! need to wrap a lot of objects in rental types.
+//! Unfortunately, there's a lot of back-and-forth calling between the parent module and here, due
+//! to our need to wrap a lot of objects in rental types.
 
 use super::{ModuleContextInner, ModuleId, TypeId};
 use crate::{

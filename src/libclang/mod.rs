@@ -23,40 +23,55 @@ pub(crate) use db::{
 };
 pub(crate) use diagnostics::ParseErrors;
 
-struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
-struct InternerInner<T: Hash + Eq, Id> {
-    map: HashMap<T, Id>,
-    values: Vec<T>,
-}
-impl<T: Hash + Eq + Clone, Id: salsa::InternKey + Copy> Interner<T, Id> {
-    fn new() -> Self {
-        Interner(RefCell::new(InternerInner {
-            map: HashMap::new(),
-            values: vec![],
-        }))
-    }
-
-    fn intern(&self, item: T) -> Id {
-        let InternerInner { map, values } = &mut *self.0.borrow_mut();
-        map.entry(item.clone())
-            .or_insert_with(|| {
-                let id = Id::from_intern_id(salsa::InternId::from(values.len()));
-                values.push(item);
-                id
-            })
-            .clone()
-    }
-
-    fn lookup(&self, id: Id) -> T {
-        self.0.borrow().values[id.as_intern_id().as_usize()].clone()
-    }
-}
-
 intern_key!(pub ModuleId);
 intern_key!(LocalFileId);
 intern_key!(EntityId);
 intern_key!(TypeId);
 
+pub(crate) fn create_index() -> Index {
+    create_index_with(Arc::new(Clang::new().unwrap()))
+}
+
+pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
+    db::Index::new(clang, false, false)
+}
+
+pub(crate) fn parse(
+    sess: &Session,
+    index: &Index,
+    module_id: ModuleId,
+    filename: &path::Path,
+) -> (ModuleContext, ParseErrors) {
+    parse_with(sess, index, module_id, vec![], |index| {
+        let parser = index.parser(filename);
+        configure(parser).parse().unwrap()
+    })
+}
+
+pub(crate) fn parse_with(
+    sess: &Session,
+    index: &Index,
+    module_id: ModuleId,
+    imports: Vec<(Path, Span)>,
+    parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
+) -> (ModuleContext, ParseErrors) {
+    let tu = index.clone().parse_with(parse_fn);
+    let ctx = db::ModuleContext::new(&sess.db, tu, imports);
+    (ctx, ParseErrors(module_id))
+}
+
+pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
+    parser.skip_function_bodies(true).arguments(&[
+        "-x",
+        "c++",
+        "-std=c++17",
+        "-isysroot",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+    ]);
+    parser
+}
+
+/// A C++ source file.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct SourceFile {
     module: ModuleId,
@@ -113,47 +128,33 @@ impl<'tu> ModuleContextInner<'tu> {
     }
 }
 
-pub(crate) fn create_index() -> Index {
-    create_index_with(Arc::new(Clang::new().unwrap()))
+struct Interner<T: Hash + Eq, Id>(RefCell<InternerInner<T, Id>>);
+struct InternerInner<T: Hash + Eq, Id> {
+    map: HashMap<T, Id>,
+    values: Vec<T>,
 }
+impl<T: Hash + Eq + Clone, Id: salsa::InternKey + Copy> Interner<T, Id> {
+    fn new() -> Self {
+        Interner(RefCell::new(InternerInner {
+            map: HashMap::new(),
+            values: vec![],
+        }))
+    }
 
-pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
-    db::Index::new(clang, false, false)
-}
+    fn intern(&self, item: T) -> Id {
+        let InternerInner { map, values } = &mut *self.0.borrow_mut();
+        map.entry(item.clone())
+            .or_insert_with(|| {
+                let id = Id::from_intern_id(salsa::InternId::from(values.len()));
+                values.push(item);
+                id
+            })
+            .clone()
+    }
 
-pub(crate) fn parse(
-    sess: &Session,
-    index: &Index,
-    module_id: ModuleId,
-    filename: &path::Path,
-) -> (ModuleContext, ParseErrors) {
-    parse_with(sess, index, module_id, vec![], |index| {
-        let parser = index.parser(filename);
-        configure(parser).parse().unwrap()
-    })
-}
-
-pub(crate) fn parse_with(
-    sess: &Session,
-    index: &Index,
-    module_id: ModuleId,
-    imports: Vec<(Path, Span)>,
-    parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
-) -> (ModuleContext, ParseErrors) {
-    let tu = index.clone().parse_with(parse_fn);
-    let ctx = db::ModuleContext::new(&sess.db, tu, imports);
-    (ctx, ParseErrors(module_id))
-}
-
-pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
-    parser.skip_function_bodies(true).arguments(&[
-        "-x",
-        "c++",
-        "-std=c++17",
-        "-isysroot",
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
-    ]);
-    parser
+    fn lookup(&self, id: Id) -> T {
+        self.0.borrow().values[id.as_intern_id().as_usize()].clone()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

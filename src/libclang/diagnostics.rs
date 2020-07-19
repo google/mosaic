@@ -1,4 +1,5 @@
-//! Utilities for converting from clang diagnostics to crate diagnostics.
+//! Utilities for converting from clang diagnostics and source objects to their
+//! [`crate::diagnostics`] equivalents.
 
 use super::{db, AstContext, ModuleContextInner, ModuleId, SourceFile};
 use crate::diagnostics::{db::SourceFileCache, Diagnostic, Diagnostics, Span};
@@ -66,7 +67,7 @@ fn convert_error<'tu>(
     Some(diag.with_labels(labels))
 }
 
-pub(super) fn mk_span<'tu>(
+pub(super) fn span_for_entity<'tu>(
     db: &impl SourceFileCache,
     mdl: ModuleId,
     ast: &ModuleContextInner<'tu>,

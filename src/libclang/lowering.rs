@@ -1,6 +1,10 @@
 //! libclang AST -> `ir::cc`.
+//!
+//! The entry point for all code in this module is lowering queries (declared in libclang::db).
 
-use super::{db, diagnostics::mk_span, index, HashType, ModuleContextInner, ModuleId, TypeId};
+use super::{
+    db, diagnostics::span_for_entity, index, HashType, ModuleContextInner, ModuleId, TypeId,
+};
 use crate::{
     diagnostics::{err, ok, Diagnostic, Diagnostics, Outcome, Span},
     ir::cc::{self, *},
@@ -13,20 +17,6 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::hash::Hash;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-enum ExportKind<'tu> {
-    Decl(Entity<'tu>),
-    Type(HashType<'tu>),
-    TemplateType(Entity<'tu>),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct Export<'tu> {
-    name: Path,
-    kind: ExportKind<'tu>,
-    span: Span,
-}
-
 pub(super) fn lower_ast(db: &impl db::AstMethods, mdl: ModuleId) -> Outcome<Module> {
     db::with_ast_module(db, mdl, |tu, ast| -> Outcome<Module> {
         let ctx = LowerCtx { db, mdl, ast };
@@ -38,6 +28,20 @@ pub(super) fn lower_ty(db: &impl db::AstMethods, mdl: ModuleId, ty: TypeId) -> O
     db::with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
         ast.types.lookup(ty).0.lower(&LowerCtx { db, mdl, ast })
     })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct Export<'tu> {
+    name: Path,
+    kind: ExportKind<'tu>,
+    span: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum ExportKind<'tu> {
+    Decl(Entity<'tu>),
+    Type(HashType<'tu>),
+    TemplateType(Entity<'tu>),
 }
 
 struct LowerCtx<'ctx, 'tu, DB: db::AstMethods> {
@@ -447,7 +451,7 @@ impl<'ctx, 'tu, DB: db::AstMethods> LowerCtx<'ctx, 'tu, DB> {
     }
 
     fn span(&self, ent: Entity<'tu>) -> Span {
-        mk_span(self.db, self.mdl, self.ast, ent)
+        span_for_entity(self.db, self.mdl, self.ast, ent)
     }
 }
 

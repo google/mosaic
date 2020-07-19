@@ -1,5 +1,4 @@
 //! A lazily populated index for looking up entities by name.
-#![allow(dead_code)]
 
 use crate::ir::cc::{Ident, Path};
 use clang::{self, Entity, EntityKind};

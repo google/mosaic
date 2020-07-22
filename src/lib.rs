@@ -20,6 +20,7 @@ use crate::diagnostics::DiagnosticsCtx;
 
 use salsa;
 use std::{
+    ffi::OsString,
     io,
     path::{Path, PathBuf},
 };
@@ -101,6 +102,10 @@ struct Opts {
     #[structopt(long)]
     out_dir: Option<String>,
 
+    /// the name of the binding crate to generate
+    #[structopt(long)]
+    crate_name: Option<OsString>,
+
     /// path to the C++ header file to generate bindings for
     input: String,
 }
@@ -120,17 +125,12 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
         .as_ref()
         .map(Path::new)
         .unwrap_or_else(|| input_path.parent().unwrap());
-    let out_base = {
+    let out_basename = opts.crate_name.unwrap_or_else(|| {
         let mut name = input_path.file_stem().unwrap().to_os_string();
         name.push("_bind");
-        out_dir.join(name)
-    };
-    let include_path = input_path
-        .file_name()
-        .unwrap()
-        .to_str()
-        .ok_or("Input filename must be valid UTF-8")?
-        .to_owned();
+        name
+    });
+    let out_base = out_dir.join(out_basename);
 
     // If the input is a Rust file, parse it for cc_use! macros and then parse the header files it
     // points to. Otherwise, parse the input file directly as C++.

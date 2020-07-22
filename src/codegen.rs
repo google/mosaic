@@ -16,11 +16,31 @@ pub(crate) struct Outputs<'a> {
     pub hdr: Option<CodeWriter<'a>>,
 }
 
+#[derive(Debug)]
+pub(crate) struct Header {
+    path: String,
+    is_system: bool,
+}
+impl Header {
+    pub fn local(path: &str) -> Self {
+        Header {
+            path: path.to_string(),
+            is_system: false,
+        }
+    }
+    pub fn system(path: &str) -> Self {
+        Header {
+            path: path.to_string(),
+            is_system: true,
+        }
+    }
+}
+
 #[rustfmt::skip::macros(write_gen)]
 pub(crate) fn perform_codegen(
     db: &(impl RsIr + CcIr),
     mdl: &rs::Module,
-    include_path: &str,
+    headers: &[Header],
     skip_header: bool,
     mut out: Outputs<'_>,
 ) -> io::Result<()> {
@@ -35,11 +55,16 @@ pub(crate) fn perform_codegen(
             ")?;
         }
         if let Some(cc) = out.cc.as_mut() {
-            let include_path = Snippet::from(include_path);
-            write_gen!(db, cc, r#"
-                #include "$include_path"
+            for hdr in headers {
+                let include_path = match hdr.is_system {
+                    true => Snippet::from(format!(r#""{}""#, hdr.path)),
+                    false => Snippet::from(format!(r#"<{}>"#, hdr.path)),
+                };
+                write_gen!(db, cc, r#"
+                    #include $include_path
 
-            "#)?;
+                "#)?;
+            }
         }
     }
 

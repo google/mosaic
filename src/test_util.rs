@@ -103,7 +103,8 @@ pub(crate) fn check_codegen(
         cc: Some(codegen::CodeWriter::new(&mut cc_out)),
         hdr: None,
     };
-    codegen::perform_codegen(&sess.db, &rs_module, "test.h", true, outputs)
+    let header = codegen::Header::local("test.h");
+    codegen::perform_codegen(&sess.db, &rs_module, &[header], true, outputs)
         .expect("Codegen failed");
 
     let check = |lang, out, expected| {

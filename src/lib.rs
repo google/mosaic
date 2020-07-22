@@ -136,18 +136,27 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
     // points to. Otherwise, parse the input file directly as C++.
     let mut sess = Session::new();
     let index = libclang::create_index();
-    let cc_modules = if let Some("rs") = input_path.extension().and_then(|p| p.to_str()) {
+    let (cc_modules, headers) = if let Some("rs") = input_path.extension().and_then(|p| p.to_str())
+    {
         let (modules, errs) = cc_use::process_rs_input(&sess, &index, &input_path)?.split();
         errs.emit(&sess.db, &sess.diags);
         modules
     } else {
+        let include_path = input_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .ok_or("Input filename must be valid UTF-8")?;
         let module_id = libclang::ModuleId::new(0);
-        vec![libclang::parse(&sess, &index, module_id, &input_path)]
+        (
+            vec![libclang::parse(&sess, &index, module_id, &input_path)],
+            vec![codegen::Header::local(&include_path)],
+        )
     };
 
     let out_rs = tempfile::Builder::new().tempfile_in(out_dir)?;
     let out_cc = tempfile::Builder::new().tempfile_in(out_dir)?;
-    let success = run_generator(&mut sess, cc_modules, &include_path, &out_rs, &out_cc);
+    let success = run_generator(&mut sess, cc_modules, headers, &out_rs, &out_cc);
     if !success {
         return Ok(101);
     }
@@ -160,7 +169,7 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
 fn run_generator(
     sess: &mut Session,
     parsed_cc_modules: Vec<(libclang::ModuleContext, libclang::ParseErrors)>,
-    include_path: &str,
+    headers: Vec<codegen::Header>,
     out_rs: impl Write,
     out_cc: impl Write,
 ) -> bool {
@@ -188,8 +197,7 @@ fn run_generator(
         if diags.has_errors() {
             return false;
         }
-        codegen::perform_codegen(db, &rs_module, &include_path, false, outputs)
-            .expect("Codegen failed");
+        codegen::perform_codegen(db, &rs_module, &headers, false, outputs).expect("Codegen failed");
         true
     })
 }

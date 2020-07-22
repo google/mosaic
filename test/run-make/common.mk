@@ -15,7 +15,9 @@ $(TMPDIR)/lib%.o: %.cc
 $(TMPDIR)/lib%.o: $(TMPDIR)/%.cc
 	$(call COMPILE_OBJ_CXX,$@,$<)
 
-$(TMPDIR)/%_bind.rs $(TMPDIR)/%_bind.cc: %.h
-	$(BINDGEN) $<
+$(TMPDIR)/%_bind.rs $(TMPDIR)/%_bind.cc: %.mod.h
+	$(BINDGEN) --crate-name=$*_bind $<
+$(TMPDIR)/%_bind.rs $(TMPDIR)/%_bind.cc: %.rs
+	$(BINDGEN) --crate-name=$*_bind $<
 $(TMPDIR)/%_bind.rlib: $(TMPDIR)/%_bind.rs $(call STATICLIB,%_bind)
 	$(RUSTC) --crate-type=lib -lstatic=$(notdir $*)_bind $(EXTRARSCXXFLAGS) $<

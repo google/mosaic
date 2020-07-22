@@ -61,5 +61,5 @@ error: item not found: `Bar::E`
 error: item not found: `B`
   ┌─ test/ui/cc_use.rs:8:38
   │
-8 │ cc_use!("nonexistent.h" in "libfoo", B); // TODO
+8 │ cc_use!("nonexistent.h" in "libfoo", B);
   │                                      ^ this item could not be found

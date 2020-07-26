@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Run cargo build with output so it doesn't look like a test is taking a long time to run.
     let build_result = Command::new("cargo")
         .arg("build")
+        .arg("--all")
         .spawn()
         .unwrap()
         .wait()
@@ -54,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         print!("test {} ... ", test_name);
         io::stdout().flush().unwrap();
 
-        let result = run_make_test(test.as_path(), nocapture);
+        let result = run_make_test(test.as_path(), &source_root, nocapture);
         match result {
             TestResult::Ok => {
                 println!("ok");
@@ -138,11 +139,18 @@ enum TestResult {
     Failed(Option<Output>),
 }
 
-fn run_make_test(test: &Path, nocapture: bool) -> TestResult {
+fn run_make_test(test: &Path, source_root: &Path, nocapture: bool) -> TestResult {
     let tmpdir = tempfile::tempdir().expect("Could not create temporary directory");
 
     let mut cmd = Command::new("make");
-    cmd.current_dir(test).env("TMPDIR", tmpdir.path());
+    cmd.current_dir(test).env("TMPDIR", tmpdir.path()).env(
+        "PROC_MACRO_DIR",
+        source_root
+            .join("target")
+            .join("debug")
+            .canonicalize()
+            .unwrap(),
+    );
 
     let compiler = {
         let mut cfg = cc::Build::new();

@@ -30,3 +30,8 @@ trybuild = { git = "https://github.com/tmandry/trybuild.git", branch = "strategy
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"
+
+[workspace]
+members = [
+    "cc_use"
+]

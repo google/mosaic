@@ -1,10 +1,8 @@
 extern crate pod_bind;
+use cc_use::cc_use;
 use pod_bind::Pod;
 
-macro_rules! cc_use {
-    ($hdr:literal, $( $import:path ),*) => {};
-}
-
+// TODO: Make paths like Foo::Pod work
 cc_use!("pod.h", Pod);
 
 fn main() {

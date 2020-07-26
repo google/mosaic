@@ -50,9 +50,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "cc_use"
 version = "0.1.0"
 dependencies = [
- "peasy 0.1.0",
+ "cc_use_common 0.1.0",
  "proc-macro2 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "quote 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn 1.0.14 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "cc_use_common"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "syn 1.0.14 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -339,6 +347,7 @@ name = "peasy"
 version = "0.1.0"
 dependencies = [
  "cc 1.0.54 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cc_use_common 0.1.0",
  "clang 0.24.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "codespan 0.9.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "codespan-reporting 0.9.5 (registry+https://github.com/rust-lang/crates.io-index)",

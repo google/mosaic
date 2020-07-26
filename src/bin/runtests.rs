@@ -7,6 +7,11 @@ use std::{
     process::{self, Command, Output},
 };
 
+struct Opts {
+    nocapture: bool,
+    noclean: bool,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let binary = PathBuf::from(&env::args_os().next().unwrap());
     let source_root = {
@@ -16,7 +21,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         root
     };
-    let nocapture = env::args().skip(1).any(|a| a == "--nocapture");
+    let nocapture = env::args().skip(1).any(|a| a == "--no-capture");
+    let noclean = env::args().skip(1).any(|a| a == "--no-clean");
+    let opts = Opts { nocapture, noclean };
 
     // Run cargo build with output so it doesn't look like a test is taking a long time to run.
     let build_result = Command::new("cargo")
@@ -55,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         print!("test {} ... ", test_name);
         io::stdout().flush().unwrap();
 
-        let result = run_make_test(test.as_path(), &source_root, nocapture);
+        let result = run_make_test(test.as_path(), &source_root, &opts);
         match result {
             TestResult::Ok => {
                 println!("ok");
@@ -68,7 +75,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if !failures.is_empty() && !nocapture {
+    if !failures.is_empty() && !opts.nocapture {
         println!("");
         println!("failures:");
         println!("");
@@ -139,7 +146,7 @@ enum TestResult {
     Failed(Option<Output>),
 }
 
-fn run_make_test(test: &Path, source_root: &Path, nocapture: bool) -> TestResult {
+fn run_make_test(test: &Path, source_root: &Path, opts: &Opts) -> TestResult {
     let tmpdir = tempfile::tempdir().expect("Could not create temporary directory");
 
     let mut cmd = Command::new("make");
@@ -190,13 +197,16 @@ fn run_make_test(test: &Path, source_root: &Path, nocapture: bool) -> TestResult
             .env("LD_LIB_PATH_ENVVAR", "LD_LIBRARY_PATH");
     }
 
-    let (status, output) = if nocapture {
+    let (status, output) = if opts.nocapture {
         let status = cmd.spawn().expect("failed to run test").wait().unwrap();
         (status, None)
     } else {
         let output = cmd.output().expect("failed to run test");
         (output.status, Some(output))
     };
+    if opts.noclean {
+        std::mem::forget(tmpdir);
+    }
     if status.success() {
         TestResult::Ok
     } else {

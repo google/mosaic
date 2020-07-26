@@ -1,8 +1,5 @@
-extern crate pod_bind;
-use cc_use::cc_use;
-use pod_bind::Pod;
-
 // TODO: Make paths like Foo::Pod work
+use cc_use::cc_use;
 cc_use!("pod.h", Pod);
 
 fn main() {

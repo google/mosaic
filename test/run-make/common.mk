@@ -5,6 +5,7 @@ PROC_MACRO_DIR ?= foo
 
 LD_LIB_PATH_ENVVAR ?= LD_LIBRARY_PATH
 include ../../../third_party/rust/run-make-fulldeps/tools.mk
+
 ifeq ($(UNAME),Darwin)
 DYLIB_FILE = lib$(1).dylib
 else
@@ -20,7 +21,7 @@ CXX := $(CXX) -I.
 BARE_BINDGEN := $(BINDGEN)
 BINDGEN      := $(BARE_BINDGEN) --out-dir $(TMPDIR)
 
-RUSTC := $(RUSTC) --edition 2018 --extern cc_use=$(PROC_MACRO_DIR)/$(call DYLIB_FILE,cc_use)
+RUSTC := $(RUSTC) --edition 2018 -D warnings --extern cc_use=$(PROC_MACRO_DIR)/$(call DYLIB_FILE,cc_use)
 
 $(TMPDIR)/lib%.o: %.cc
 	$(call COMPILE_OBJ_CXX,$@,$<)

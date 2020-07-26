@@ -26,7 +26,6 @@ fn cc_use_impl(input: CcUse) -> TokenStream {
     let bind_crate_name = Ident::new(&(crate_name + "_bind"), Span::call_site());
     let paths: Punctuated<_, Token![,]> = input.cc_paths.iter().collect();
     quote! {
-        extern crate #bind_crate_name;
         use #bind_crate_name::{#paths};
     }
 }

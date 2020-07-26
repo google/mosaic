@@ -27,7 +27,8 @@ fn cc_use_impl(input: CcUse) -> TokenStream {
         name: PathBuf::from(header.path)
             .file_stem()
             .unwrap()
-            .to_string_lossy()
+            .to_str()
+            .expect("Header path must be valid UTF-8")
             .to_string(),
         span: header.span,
     });

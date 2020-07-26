@@ -4,10 +4,10 @@
 
 extern crate proc_macro;
 
-use cc_use_common::{CcUse, LibName};
-use proc_macro2::TokenStream;
+use cc_use_common::CcUse;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
-use std::path::PathBuf;
+use std::env;
 use syn::{parse_macro_input, punctuated::Punctuated, Ident, Token};
 
 #[proc_macro]
@@ -17,25 +17,16 @@ pub fn cc_use(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 }
 
 fn cc_use_impl(input: CcUse) -> TokenStream {
-    let CcUse {
-        header,
-        lib_name,
-        cc_paths,
-        ..
-    } = input;
-    let native_lib = lib_name.clone().unwrap_or_else(|| LibName {
-        name: PathBuf::from(header.path)
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .expect("Header path must be valid UTF-8")
-            .to_string(),
-        span: header.span,
-    });
-    let crate_name = Ident::new(&(native_lib.name + "_bind"), native_lib.span);
-    let paths: Punctuated<_, Token![,]> = cc_paths.iter().collect();
+    // FIXME: We should allow setting the name of the binding crate explicitly since external build
+    // systems will have to care about that.
+    let crate_name = env::var("PKG_NAME")
+        .or(env::var("CARGO_PKG_NAME"))
+        .expect("CARGO_PKG_NAME or PKG_NAME must be defined")
+        .to_owned();
+    let bind_crate_name = Ident::new(&(crate_name + "_bind"), Span::call_site());
+    let paths: Punctuated<_, Token![,]> = input.cc_paths.iter().collect();
     quote! {
-        extern crate #crate_name;
-        use #crate_name::{#paths};
+        extern crate #bind_crate_name;
+        use #bind_crate_name::{#paths};
     }
 }

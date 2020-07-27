@@ -613,7 +613,7 @@ dependencies = [
 [[package]]
 name = "trybuild"
 version = "1.0.30"
-source = "git+https://github.com/tmandry/trybuild.git?branch=strategy#4baf5ed71996275b26f7943db4336257699bc7a9"
+source = "git+https://github.com/tmandry/trybuild.git?branch=strategy#1a5990c464ace441be4eb2b0b59bb1315c93e0a1"
 dependencies = [
  "glob 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",

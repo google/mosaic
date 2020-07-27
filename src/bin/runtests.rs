@@ -1,4 +1,5 @@
 use cc_crate as cc;
+use itertools::Itertools;
 use std::{
     env,
     error::Error,
@@ -6,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::{self, Command, Output},
 };
+use trybuild as tb;
 
 struct Opts {
     nocapture: bool,
@@ -119,14 +121,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 struct RunGenerator {
     source_root: PathBuf,
 }
-impl trybuild::Strategy for RunGenerator {
-    fn prepare(&mut self, _tests: &[trybuild::Test]) -> trybuild::Result<trybuild::Project> {
-        let mut project = trybuild::Project::new()?;
+impl tb::Strategy for RunGenerator {
+    fn prepare(&mut self, _tests: &[tb::Test]) -> tb::Result<tb::Project> {
+        let mut project = tb::Project::new()?;
         project.source_dir = self.source_root.clone();
         Ok(project)
     }
 
-    fn build(&self, test: &trybuild::Test) -> trybuild::Result<Command> {
+    fn build(&self, test: &tb::Test) -> tb::Result<Command> {
         let mut cmd = if cfg!(windows) {
             Command::new(self.source_root.join("target\\debug\\peasy.exe"))
         } else {
@@ -136,8 +138,35 @@ impl trybuild::Strategy for RunGenerator {
         Ok(cmd)
     }
 
-    fn run(&self, _test: &trybuild::Test) -> trybuild::Result<Command> {
+    fn run(&self, _test: &tb::Test) -> tb::Result<Command> {
         unimplemented!()
+    }
+
+    fn normalize(&self, _project: &tb::Project, test: &tb::Test, output: &str) -> String {
+        output
+            .lines()
+            .map(|line| {
+                const PAT: &str = "┌─ ";
+                if line.trim_start().starts_with(PAT) {
+                    let cut_start = line.find(PAT).unwrap() + PAT.len();
+                    if let Some(cut_end) = line.rfind(&['/', '\\'][..]) {
+                        return String::from(&line[..cut_start]) + "$DIR/" + &line[cut_end + 1..];
+                    }
+                }
+                line.trim_end().replace(&test.crate_name(), "$CRATE")
+            })
+            .join("\n")
+    }
+
+    fn matches(
+        &self,
+        project: &tb::Project,
+        test: &tb::Test,
+        expected: &str,
+        actual: &str,
+    ) -> bool {
+        let actual = self.normalize(project, test, actual);
+        expected == actual
     }
 }
 

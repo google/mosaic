@@ -1,5 +1,5 @@
 error: invalid rust_export item
-  ┌─ test/ui/invalid_export.cc:3:5
+  ┌─ $DIR/invalid_export.cc:3:5
   │
 3 │ ╭     struct FooBar
 4 │ │     {
@@ -7,7 +7,7 @@ error: invalid rust_export item
   │ ╰─────^ only using declarations are allowed here
 
 error: invalid rust_export item
-  ┌─ test/ui/invalid_export.cc:7:5
+  ┌─ $DIR/invalid_export.cc:7:5
   │
 7 │     int baz;
   │     ^^^^^^^ only using declarations are allowed here

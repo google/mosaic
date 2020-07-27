@@ -181,11 +181,18 @@ fn run_make_test(test: &Path, source_root: &Path, opts: &Opts) -> TestResult {
     let mut cmd = Command::new("make");
     cmd.current_dir(test).env("TMPDIR", tmpdir.path()).env(
         "PROC_MACRO_DIR",
-        source_root
-            .join("target")
-            .join("debug")
-            .canonicalize()
-            .unwrap(),
+        format!(
+            "'{}'",
+            source_root
+                .join("target")
+                .join("debug")
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                // Remove UNC path on windows, which rustc can't handle in --extern.
+                .trim_start_matches(r#"\\?\"#)
+        ),
     );
 
     let compiler = {

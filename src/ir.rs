@@ -23,7 +23,9 @@ pub trait IrMethods {
 
 /// A top-level defintion of some kind.
 ///
-/// A Def can be defined in either C++ or Rust.
+/// A Def can be defined in either C++ or Rust and can reference defs from
+/// either language. This is most useful for expressing a cross-language import
+/// in a cc_use, for instance.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum DefKind {
     CcDef(cc::ItemKind),
@@ -46,6 +48,7 @@ impl Def {
     }
 }
 
+/// The set of defs that are being imported from one translation unit.
 #[derive(Default, Debug, Eq, PartialEq)]
 pub struct Module {
     pub exports: Vec<DefKind>,
@@ -62,7 +65,7 @@ impl Module {
     pub fn to_rs_bindings(
         &self,
         db: &(impl IrMethods + cc::RsIr + AstMethods),
-    ) -> Outcome<rs::Module> {
+    ) -> Outcome<rs::BindingsCrate> {
         self.reachable_items(db)
             .map(|def| {
                 let item = match def {
@@ -83,7 +86,7 @@ impl Module {
                         item
                     })
                     .collect();
-                ok(rs::Module { items, exports })
+                ok(rs::BindingsCrate { items, exports })
             })
     }
 }
@@ -333,7 +336,7 @@ pub mod cc {
     #[salsa::requires(AstMethods)]
     #[salsa::requires(IrMethods)]
     pub trait RsIr {
-        fn rs_bindings(&self) -> Arc<Outcome<rs::Module>>;
+        fn rs_bindings(&self) -> Arc<Outcome<rs::BindingsCrate>>;
 
         fn rs_struct_from_cc(&self, id: cc::StructId) -> Outcome<rs::StructId>;
 
@@ -348,11 +351,11 @@ pub mod cc {
         ty.as_cc(db).then(|ty| ty.to_rust(db))
     }
 
-    fn rs_bindings(db: &(impl AstMethods + RsIr + IrMethods)) -> Arc<Outcome<rs::Module>> {
+    fn rs_bindings(db: &(impl AstMethods + RsIr + IrMethods)) -> Arc<Outcome<rs::BindingsCrate>> {
         // For now we combine bindings from all cc modules into a single rs module.
         // They should be separated at some point.
         let mut diags = Diagnostics::new();
-        let mut module = rs::Module::default();
+        let mut module = rs::BindingsCrate::default();
         for id in db.cc_module_ids() {
             let (mdl, errs) = db
                 .cc_ir_from_src(id)
@@ -694,20 +697,24 @@ pub mod rs {
         Struct(StructId),
     }
 
+    /// Represents everything that goes in a bindings crate.
+    ///
+    /// All information that's needed to generate bindings code in both Rust and
+    /// C++ for the crate are accessible from this object.
     #[derive(Debug, Clone, Eq, PartialEq, Default)]
-    pub struct Module {
+    pub struct BindingsCrate {
         pub items: Vec<ItemKind>,
         pub exports: HashSet<ItemKind>,
     }
 
-    impl Module {
+    impl BindingsCrate {
         pub fn exported_structs<'a>(&'a self) -> impl Iterator<Item = StructId> + 'a {
             self.exports.iter().flat_map(|item| match item {
                 ItemKind::Struct(id) => Some(*id),
             })
         }
 
-        pub fn append(&mut self, mut other: Module) {
+        pub fn append(&mut self, mut other: BindingsCrate) {
             self.items.append(&mut other.items);
             self.exports.extend(other.exports.iter().cloned());
         }

@@ -70,7 +70,7 @@ pub(crate) fn parse_and_lower(
     sess: &mut Session,
     src: &str,
     expected: Vec<&str>,
-) -> ir::rs::Module {
+) -> ir::rs::BindingsCrate {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
 
     let index = libclang::create_index_with(CLANG.clone());

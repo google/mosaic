@@ -39,7 +39,7 @@ impl Header {
 #[rustfmt::skip::macros(write_gen)]
 pub(crate) fn perform_codegen(
     db: &(impl RsIr + CcIr),
-    mdl: &rs::Module,
+    mdl: &rs::BindingsCrate,
     headers: &[Header],
     skip_header: bool,
     mut out: Outputs<'_>,

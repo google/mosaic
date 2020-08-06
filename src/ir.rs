@@ -11,7 +11,7 @@
 use crate::diagnostics::{err, ok, Diagnostic, Outcome, Span};
 use crate::libclang::AstMethods;
 use itertools::Itertools;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
 
@@ -75,18 +75,11 @@ impl Module {
             })
             .collect::<Outcome<Vec<_>>>()
             .then(|structs| {
-                let mut exports = HashSet::new();
                 let items = structs
                     .iter()
-                    .map(|(def, st)| {
-                        let item = rs::ItemKind::Struct(*st);
-                        if self.exports.contains(def) {
-                            exports.insert(item);
-                        }
-                        item
-                    })
+                    .map(|(_, st)| rs::ItemKind::Struct(*st))
                     .collect();
-                ok(rs::BindingsCrate { items, exports })
+                ok(rs::BindingsCrate { items })
             })
     }
 }
@@ -704,19 +697,23 @@ pub mod rs {
     #[derive(Debug, Clone, Eq, PartialEq, Default)]
     pub struct BindingsCrate {
         pub items: Vec<ItemKind>,
-        pub exports: HashSet<ItemKind>,
     }
 
     impl BindingsCrate {
-        pub fn exported_structs<'a>(&'a self) -> impl Iterator<Item = StructId> + 'a {
-            self.exports.iter().flat_map(|item| match item {
-                ItemKind::Struct(id) => Some(*id),
+        /// Iterates over all structs that are accessible from outside the
+        /// crate.
+        pub fn visible_structs<'a>(
+            &'a self,
+            db: &'a impl RsIr,
+        ) -> impl Iterator<Item = StructId> + 'a {
+            self.items.iter().filter_map(move |item| match item {
+                ItemKind::Struct(id) if id.lookup(db).vis.is_public() => Some(*id),
+                _ => None,
             })
         }
 
         pub fn append(&mut self, mut other: BindingsCrate) {
             self.items.append(&mut other.items);
-            self.exports.extend(other.exports.iter().cloned());
         }
     }
 
@@ -777,6 +774,11 @@ pub mod rs {
     pub enum Visibility {
         Public,
         Private,
+    }
+    impl Visibility {
+        fn is_public(&self) -> bool {
+            *self == Visibility::Public
+        }
     }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -868,7 +870,8 @@ mod tests {
                 using ::Pod;
             }
         });
-        let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
+        let db = &sess.db;
+        let st = ir.visible_structs(db).next().unwrap().lookup(db);
         assert_eq!(
             st.fields
                 .iter()
@@ -892,7 +895,8 @@ mod tests {
                 using ::Pod;
             }
         });
-        let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
+        let db = &sess.db;
+        let st = ir.visible_structs(db).next().unwrap().lookup(db);
         assert_eq!(rs::Size::new(4), st.size);
         assert_eq!(rs::Align::new(4), st.align);
     }
@@ -944,7 +948,8 @@ mod tests {
                 using ::Bar;
             }
         });
-        let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
+        let db = &sess.db;
+        let st = ir.visible_structs(db).next().unwrap().lookup(db);
         assert_eq!(rs::Size::new(12), st.size);
         assert_eq!(rs::Align::new(4), st.align);
     }
@@ -964,7 +969,8 @@ mod tests {
                 using ::Bar;
             }
         });
-        let st = ir.exported_structs().next().unwrap().lookup(&sess.db);
+        let db = &sess.db;
+        let st = ir.visible_structs(db).next().unwrap().lookup(db);
         assert_eq!(rs::Size::new(16), st.size);
         assert_eq!(rs::Align::new(8), st.align);
     }

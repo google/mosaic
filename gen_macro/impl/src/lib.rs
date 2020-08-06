@@ -269,8 +269,6 @@ fn skip_indent(indent: usize, chars: &mut Peekable<impl Iterator<Item = (usize, 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test() {
         panic!()

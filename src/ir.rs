@@ -43,6 +43,7 @@ impl From<cc::StructId> for DefKind {
 
 intern_key!(Def);
 impl Def {
+    #[allow(unused)]
     pub fn lookup(&self, db: &impl IrMethods) -> DefKind {
         db.lookup_intern_def(*self)
     }
@@ -376,6 +377,7 @@ pub mod cc {
 
     intern_key!(FunctionId);
     impl FunctionId {
+        #[allow(unused)]
         pub fn lookup(&self, db: &impl AstMethods) -> Arc<Outcome<Function>> {
             db.lookup_intern_cc_fn(*self)
         }
@@ -702,6 +704,7 @@ pub mod rs {
     impl BindingsCrate {
         /// Iterates over all structs that are accessible from outside the
         /// crate.
+        #[allow(unused)]
         pub fn visible_structs<'a>(
             &'a self,
             db: &'a impl RsIr,

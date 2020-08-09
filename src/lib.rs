@@ -35,7 +35,7 @@ use io::Write;
     ir::IrMethodsStorage,
     ir::cc::RsIrStorage
 )]
-pub struct Database {
+pub(crate) struct Database {
     runtime: salsa::Runtime<Database>,
 }
 

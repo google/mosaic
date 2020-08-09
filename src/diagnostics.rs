@@ -441,6 +441,7 @@ impl<T> Outcome<T> {
         }
     }
 
+    #[allow(unused)]
     pub fn is_ok(&self) -> bool {
         self.err.val.is_empty()
     }
@@ -457,6 +458,7 @@ impl<T> Outcome<T> {
         self.as_ref()
     }
 
+    #[allow(unused)]
     pub fn val(self) -> Result<T, Diagnostics> {
         if self.is_ok() {
             Ok(self.val)
@@ -469,6 +471,7 @@ impl<T> Outcome<T> {
         self.val
     }
 
+    #[allow(unused)]
     pub fn errs(self) -> Diagnostics {
         self.err
     }
@@ -507,10 +510,12 @@ pub struct RefOutcome<'a, T> {
 }
 
 impl<'a, T> RefOutcome<'a, T> {
+    #[allow(unused)]
     pub fn is_ok(&self) -> bool {
         self.err.val.is_empty()
     }
 
+    #[allow(unused)]
     pub fn val(self) -> Result<&'a T, &'a Diagnostics> {
         if self.is_ok() {
             Ok(self.val)
@@ -523,6 +528,7 @@ impl<'a, T> RefOutcome<'a, T> {
         self.val
     }
 
+    #[allow(unused)]
     pub fn errs(self) -> &'a Diagnostics {
         self.err
     }

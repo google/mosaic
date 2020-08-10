@@ -75,8 +75,9 @@ pub(crate) fn parse_and_lower(
 
     let index = libclang::create_index_with(CLANG.clone());
     let module_id = libclang::ModuleId::new(0);
-    let (ast, errs) =
-        libclang::parse_with(&sess, &index, module_id, vec![], |index| parse(index, src));
+    let (ast, errs) = libclang::parse_with(&sess.db, &index, module_id, vec![], |index| {
+        parse(index, src)
+    });
     let (rust_ir, errs) = libclang::set_ast(&mut sess.db, vec![ast], |db| {
         Outcome::from_parts((), errs.to_diagnostics(db)).then(|_| Outcome::clone(&db.rs_bindings()))
     })
@@ -103,7 +104,11 @@ pub(crate) fn check_codegen(
         cc: Some(codegen::CodeWriter::new(&mut cc_out)),
         hdr: None,
     };
-    let header = codegen::Header::local("test.h");
+    let header = ir::bindings::Header {
+        path: "test.h".to_string(),
+        is_system: false,
+        span: None,
+    };
     codegen::perform_codegen(&sess.db, &rs_module, &[header], true, outputs)
         .expect("Codegen failed");
 

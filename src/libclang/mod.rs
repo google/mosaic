@@ -10,7 +10,6 @@ use crate::{
         self,
         cc::{self, *},
     },
-    Session,
 };
 use clang::{self, source, Clang, Entity, Parser, TranslationUnit, Type};
 use core::hash::Hasher;
@@ -31,26 +30,26 @@ pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
 }
 
 pub(crate) fn parse(
-    sess: &Session,
+    db: &impl SourceFileCache,
     index: &Index,
     module_id: ModuleId,
     filename: &path::Path,
 ) -> (ModuleContext, ParseErrors) {
-    parse_with(sess, index, module_id, vec![], |index| {
+    parse_with(db, index, module_id, vec![], |index| {
         let parser = index.parser(filename);
         configure(parser).parse().unwrap()
     })
 }
 
 pub(crate) fn parse_with(
-    sess: &Session,
+    db: &impl SourceFileCache,
     index: &Index,
     module_id: ModuleId,
     imports: Vec<(Path, Span)>,
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
 ) -> (ModuleContext, ParseErrors) {
     let tu = index.clone().parse_with(parse_fn);
-    let ctx = ModuleContext::new(&sess.db, tu, imports);
+    let ctx = ModuleContext::new(db, tu, imports);
     (ctx, ParseErrors(module_id))
 }
 
@@ -66,6 +65,12 @@ pub(crate) fn configure(mut parser: Parser<'_>) -> Parser<'_> {
 }
 
 intern_key!(pub ModuleId);
+impl ModuleId {
+    pub(crate) fn as_usize(&self) -> usize {
+        self.0.as_usize()
+    }
+}
+
 thread_local! {
     // Use thread-local storage so we can fully control the lifetime of our TranslationUnit.
     static AST_CONTEXT: RefCell<Option<Vec<ModuleContext>>> = RefCell::new(None);

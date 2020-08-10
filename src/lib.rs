@@ -16,19 +16,19 @@ mod diagnostics;
 mod ir;
 mod libclang;
 
-use crate::diagnostics::DiagnosticsCtx;
+use cc_use::RsSource;
+use diagnostics::DiagnosticsCtx;
 
 use salsa;
 use std::{
     ffi::OsString,
-    io,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 use structopt::StructOpt;
 
-use io::Write;
-
 #[salsa::database(
+    cc_use::RsSourceStorage,
     libclang::AstContextStorage,
     libclang::AstMethodsStorage,
     diagnostics::db::SourceFileCacheStorage,
@@ -136,11 +136,19 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
     // points to. Otherwise, parse the input file directly as C++.
     let mut sess = Session::new();
     let index = libclang::create_index();
+    let (rs_headers, cli_headers);
     let (cc_modules, headers) = if let Some("rs") = input_path.extension().and_then(|p| p.to_str())
     {
-        let (modules, errs) = cc_use::process_rs_input(&sess, &index, &input_path)?.split();
+        sess.db
+            .set_rs_source_root(cc_use::SourceFile::intern_from_path(&sess.db, &input_path)?);
+        let (module_ids, errs) = sess.db.module_ids().split();
         errs.emit(&sess.db, &sess.diags);
-        modules
+        let modules = module_ids
+            .iter()
+            .map(|module_id| cc_use::cc_module_from_rs(&sess.db, &index, *module_id))
+            .collect();
+        rs_headers = sess.db.headers().skip_errs();
+        (modules, &*rs_headers)
     } else {
         let include_path = input_path
             .file_name()
@@ -148,9 +156,14 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
             .to_str()
             .ok_or("Input filename must be valid UTF-8")?;
         let module_id = libclang::ModuleId::new(0);
+        cli_headers = vec![ir::bindings::Header {
+            path: include_path.to_string(),
+            is_system: false,
+            span: None,
+        }];
         (
-            vec![libclang::parse(&sess, &index, module_id, &input_path)],
-            vec![codegen::Header::local(&include_path)],
+            vec![libclang::parse(&sess.db, &index, module_id, &input_path)],
+            &*cli_headers,
         )
     };
 
@@ -169,7 +182,7 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
 fn run_generator(
     sess: &mut Session,
     parsed_cc_modules: Vec<(libclang::ModuleContext, libclang::ParseErrors)>,
-    headers: Vec<codegen::Header>,
+    headers: &[ir::bindings::Header],
     out_rs: impl Write,
     out_cc: impl Write,
 ) -> bool {
@@ -197,7 +210,7 @@ fn run_generator(
         if diags.has_errors() {
             return false;
         }
-        codegen::perform_codegen(db, &rs_module, &headers, false, outputs).expect("Codegen failed");
+        codegen::perform_codegen(db, &rs_module, headers, false, outputs).expect("Codegen failed");
         true
     })
 }

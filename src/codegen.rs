@@ -3,7 +3,7 @@
 #![cfg_attr(rustfmt, rustfmt::skip::macros(write_gen))]
 
 use crate::ir::cc::{CcIr, RsIr};
-use crate::ir::{cc, rs};
+use crate::ir::{bindings, cc, rs};
 use gen_macro::{snippet, write_gen, Gen, Snippet};
 use itertools::Itertools;
 use std::io::{self, Write};
@@ -16,31 +16,11 @@ pub(crate) struct Outputs<'a> {
     pub hdr: Option<CodeWriter<'a>>,
 }
 
-#[derive(Debug)]
-pub(crate) struct Header {
-    path: String,
-    is_system: bool,
-}
-impl Header {
-    pub fn local(path: &str) -> Self {
-        Header {
-            path: path.to_string(),
-            is_system: false,
-        }
-    }
-    pub fn system(path: &str) -> Self {
-        Header {
-            path: path.to_string(),
-            is_system: true,
-        }
-    }
-}
-
 #[rustfmt::skip::macros(write_gen)]
 pub(crate) fn perform_codegen(
     db: &(impl RsIr + CcIr),
     mdl: &rs::BindingsCrate,
-    headers: &[Header],
+    headers: &[bindings::Header],
     skip_header: bool,
     mut out: Outputs<'_>,
 ) -> io::Result<()> {

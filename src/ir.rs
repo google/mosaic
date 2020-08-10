@@ -26,6 +26,9 @@ pub trait IrMethods {
 /// A Def can be defined in either C++ or Rust and can reference defs from
 /// either language. This is most useful for expressing a cross-language import
 /// in a cc_use, for instance.
+// If we actually use this for expressing exported/imported items, we may want
+// to make this representation more shallow, i.e. just names with semantic info
+// attached or only up to ast objects.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub enum DefKind {
     CcDef(cc::ItemKind),
@@ -312,6 +315,29 @@ mod common {
         pub fn as_rs(&self, db: &impl cc::RsIr) -> Outcome<rs::Ty> {
             db.rs_type_of(self.clone())
         }
+    }
+}
+
+/// IR that represents the bindings between two languages.
+pub mod bindings {
+    use super::*;
+    pub use crate::libclang::ModuleId;
+    pub use common::Path;
+
+    /// A C++ header file.
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+    pub(crate) struct Header {
+        pub path: String,
+        pub is_system: bool,
+        pub span: Option<Span>,
+    }
+
+    /// An item imported from C++ into Rust.
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+    pub(crate) struct Import {
+        pub mdl: ModuleId,
+        pub path: Path,
+        pub span: Span,
     }
 }
 

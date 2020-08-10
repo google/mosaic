@@ -208,14 +208,14 @@ impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
                     if !export_set.insert(def.clone()) {
                         // TODO we should represent this as unique aliases to
                         // the same item, so we can't have "duplicate" exports.
-                        return err(
-                            (),
-                            Diagnostic::error(
-                                "multiple exports of the same item are not supported",
-                                self.span(*decl_ref)
-                                    .label("this item has already been exported"),
-                            ),
-                        );
+                        //return err(
+                        //    (),
+                        //    Diagnostic::error(
+                        //        "multiple exports of the same item are not supported",
+                        //        self.span(*decl_ref)
+                        //            .label("this item has already been exported"),
+                        //    ),
+                        //);
                     }
                     mdl.exports.push(def);
                 }

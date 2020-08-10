@@ -38,6 +38,18 @@ pub mod db {
                 .cmp(&other.as_intern_id().as_usize())
         }
     }
+    impl FileId {
+        pub fn name(self, db: &impl SourceFileCache) -> String {
+            db.lookup_intern_source_file(self)
+                .get_name_and_contents(db)
+                .0
+        }
+        pub fn contents(self, db: &impl SourceFileCache) -> String {
+            db.lookup_intern_source_file(self)
+                .get_name_and_contents(db)
+                .1
+        }
+    }
 
     /// Caches sources for use in diagnostics.
     ///
@@ -542,6 +554,13 @@ impl<'a, T> RefOutcome<'a, T> {
         Outcome {
             val: outcome.val,
             err: Diagnostics::merge(&self.err, &outcome.err),
+        }
+    }
+
+    pub fn map<R>(self, f: impl FnOnce(&'a T) -> R) -> Outcome<R> {
+        Outcome {
+            val: f(self.val),
+            err: self.err.clone(),
         }
     }
 }

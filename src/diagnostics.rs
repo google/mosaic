@@ -8,6 +8,7 @@ use codespan_reporting::diagnostic as imp;
 use codespan_reporting::term;
 use std::{
     cell::RefCell,
+    collections::HashSet,
     fmt::{self, Debug},
     hash::{Hash, Hasher},
     iter::{FromIterator, IntoIterator},
@@ -168,6 +169,7 @@ pub struct DiagnosticsCtx(Rc<RefCell<CtxInner>>);
 struct CtxInner {
     counts: Counts,
     mode: Mode,
+    seen: HashSet<UniqueDiagnostic>,
 }
 
 enum Mode {
@@ -198,6 +200,7 @@ impl DiagnosticsCtx {
             mode: Mode::Term {
                 writer: termcolor::StandardStream::stderr(ColorChoice::Auto),
             },
+            seen: HashSet::new(),
         };
         DiagnosticsCtx(Rc::new(RefCell::new(inner)))
     }
@@ -207,6 +210,7 @@ impl DiagnosticsCtx {
         let inner = CtxInner {
             counts: Counts::default(),
             mode: Mode::Test { errs: vec![] },
+            seen: HashSet::new(),
         };
         DiagnosticsCtx(Rc::new(RefCell::new(inner)))
     }
@@ -293,7 +297,7 @@ impl Diagnostic {
         )
     }
 
-    pub fn emit(self, db: &'_ impl db::SourceFileCache, ctx: &DiagnosticsCtx) {
+    fn emit(&self, db: &'_ impl db::SourceFileCache, ctx: &DiagnosticsCtx) {
         let CtxInner { mode, counts, .. } = &mut *ctx.0.borrow_mut();
         match self.0.severity {
             imp::Severity::Bug => counts.bugs += 1,
@@ -307,7 +311,7 @@ impl Diagnostic {
                 term::emit(writer, &Default::default(), &db::FilesWrapper(db), &self.0)
                     .expect("failed to emit diagnostic")
             }
-            Mode::Test { errs } => errs.push(self.0.message),
+            Mode::Test { errs } => errs.push(self.0.message.clone()),
         }
     }
 
@@ -338,12 +342,41 @@ impl Diagnostic {
     }
 }
 
+// This is not great. Hopefully this whole abstraction goes away when salsa
+// adds support for side effects.
+#[derive(Clone, Debug)]
+struct UniqueDiagnostic(Arc<Diagnostic>);
+impl PartialEq for UniqueDiagnostic {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for UniqueDiagnostic {}
+impl Hash for UniqueDiagnostic {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_usize(&*self.0 as *const Diagnostic as usize);
+    }
+}
+impl From<Diagnostic> for UniqueDiagnostic {
+    fn from(err: Diagnostic) -> Self {
+        UniqueDiagnostic(Arc::new(err))
+    }
+}
+impl UniqueDiagnostic {
+    fn emit(&self, db: &'_ impl db::SourceFileCache, ctx: &DiagnosticsCtx) {
+        if !ctx.0.borrow_mut().seen.insert(self.clone()) {
+            return;
+        }
+        self.0.emit(db, ctx);
+    }
+}
+
 /// An ordered list of diagnostics.
 // TODO: panic if a Diagnostic[s] is dropped without ever being emitted
 #[derive(Clone, Debug)]
 #[must_use]
 pub struct Diagnostics {
-    val: Arc<Vec<Diagnostic>>,
+    val: Arc<Vec<UniqueDiagnostic>>,
 }
 impl Diagnostics {
     pub fn new() -> Diagnostics {
@@ -360,7 +393,7 @@ impl Diagnostics {
 
     /// Adds a diagnostic.
     pub fn add(&mut self, diag: Diagnostic) {
-        Arc::make_mut(&mut self.val).push(diag);
+        Arc::make_mut(&mut self.val).push(UniqueDiagnostic(Arc::new(diag)));
     }
 
     /// Combines diagnostics from `self` and `second` in order.
@@ -389,8 +422,7 @@ impl Diagnostics {
     }
 
     pub fn emit(self, db: &impl db::SourceFileCache, ctx: &DiagnosticsCtx) {
-        let diags: Vec<_> = self.into();
-        for diag in diags {
+        for diag in self.val.iter() {
             diag.emit(db, ctx);
         }
     }
@@ -399,8 +431,10 @@ impl Diagnostics {
         self.val.is_empty()
     }
 
+    // TODO this is brittle now
+    #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
-        self.val.iter()
+        self.val.iter().map(|d| &*d.0)
     }
 }
 impl PartialEq for Diagnostics {
@@ -417,11 +451,11 @@ impl Hash for Diagnostics {
 impl From<Diagnostic> for Diagnostics {
     fn from(err: Diagnostic) -> Self {
         Diagnostics {
-            val: Arc::new(vec![err]),
+            val: Arc::new(vec![err.into()]),
         }
     }
 }
-impl From<Diagnostics> for Vec<Diagnostic> {
+impl From<Diagnostics> for Vec<UniqueDiagnostic> {
     fn from(diags: Diagnostics) -> Self {
         Arc::try_unwrap(diags.val).unwrap_or_else(|val| Vec::clone(&val))
     }
@@ -455,7 +489,7 @@ impl<T> Outcome<T> {
 
     #[allow(unused)]
     pub fn is_ok(&self) -> bool {
-        self.err.val.is_empty()
+        self.err.is_empty()
     }
 
     pub fn as_ref<'a>(&'a self) -> RefOutcome<'a, T> {
@@ -521,13 +555,12 @@ pub struct RefOutcome<'a, T> {
     err: &'a Diagnostics,
 }
 
+#[allow(unused)]
 impl<'a, T> RefOutcome<'a, T> {
-    #[allow(unused)]
     pub fn is_ok(&self) -> bool {
-        self.err.val.is_empty()
+        self.err.is_empty()
     }
 
-    #[allow(unused)]
     pub fn val(self) -> Result<&'a T, &'a Diagnostics> {
         if self.is_ok() {
             Ok(self.val)
@@ -540,7 +573,6 @@ impl<'a, T> RefOutcome<'a, T> {
         self.val
     }
 
-    #[allow(unused)]
     pub fn errs(self) -> &'a Diagnostics {
         self.err
     }

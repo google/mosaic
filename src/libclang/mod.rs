@@ -5,11 +5,8 @@ mod index;
 mod lowering;
 
 use crate::{
-    diagnostics::{db::SourceFileCache, Outcome, Span},
-    ir::{
-        self,
-        cc::{self, *},
-    },
+    diagnostics::{db::SourceFileCache, Outcome},
+    ir::{self, cc},
 };
 use clang::{self, source, Clang, Entity, Parser, TranslationUnit, Type};
 use core::hash::Hasher;
@@ -35,7 +32,7 @@ pub(crate) fn parse(
     module_id: ModuleId,
     filename: &path::Path,
 ) -> (ModuleContext, ParseErrors) {
-    parse_with(db, index, module_id, vec![], |index| {
+    parse_with(db, index, module_id, |index| {
         let parser = index.parser(filename);
         configure(parser).parse().unwrap()
     })
@@ -45,11 +42,10 @@ pub(crate) fn parse_with(
     db: &impl SourceFileCache,
     index: &Index,
     module_id: ModuleId,
-    imports: Vec<(Path, Span)>,
     parse_fn: impl for<'i, 'tu> FnOnce(&'tu clang::Index<'i>) -> clang::TranslationUnit<'tu>,
 ) -> (ModuleContext, ParseErrors) {
     let tu = index.clone().parse_with(parse_fn);
-    let ctx = ModuleContext::new(db, tu, imports);
+    let ctx = ModuleContext::new(db, tu);
     (ctx, ParseErrors(module_id))
 }
 
@@ -113,7 +109,12 @@ pub trait AstContext {
 #[salsa::query_group(AstMethodsStorage)]
 pub trait AstMethods: AstContext + SourceFileCache {
     fn cc_module_ids(&self) -> Vec<ModuleId>;
-    fn cc_ir_from_src(&self, mdl: ModuleId) -> Arc<Outcome<ir::Module>>;
+
+    #[salsa::invoke(lowering::cc_exported_items)]
+    fn cc_exported_items(&self, mdl: ModuleId) -> Outcome<Arc<[ir::DefKind]>>;
+
+    #[salsa::invoke(lowering::cc_item)]
+    fn cc_item(&self, import: ir::bindings::Import) -> Outcome<Option<ir::DefKind>>;
 
     #[salsa::invoke(lowering::lower_ty)]
     fn type_of(&self, mdl: ModuleId, id: TypeId) -> Outcome<ir::cc::Ty>;
@@ -128,10 +129,6 @@ pub trait AstMethods: AstContext + SourceFileCache {
 fn ast_context(db: &(impl AstContext + salsa::Database)) {
     db.salsa_runtime()
         .report_synthetic_read(salsa::Durability::LOW);
-}
-
-fn cc_ir_from_src(db: &impl AstMethods, mdl: ModuleId) -> Arc<Outcome<ir::Module>> {
-    Arc::new(lowering::lower_ast(db, mdl))
 }
 
 fn cc_module_ids(db: &impl AstMethods) -> Vec<ModuleId> {
@@ -165,9 +162,9 @@ impl Index {
 
 pub struct ModuleContext(rent::ModuleContext);
 impl ModuleContext {
-    fn new(db: &impl SourceFileCache, tu: AstTu, imports: Vec<(Path, Span)>) -> Self {
+    fn new(db: &impl SourceFileCache, tu: AstTu) -> Self {
         ModuleContext(rent::ModuleContext::new(tu.0, |tu| {
-            ModuleContextInner::new(db, tu.tu, imports)
+            ModuleContextInner::new(db, tu.tu)
         }))
     }
     fn with<R>(
@@ -189,31 +186,25 @@ intern_key!(TypeId);
 struct ModuleContextInner<'tu> {
     #[allow(dead_code)]
     root: clang::Entity<'tu>,
-    import_paths: Vec<(Path, Span)>,
 
     files: Interner<source::File<'tu>, LocalFileId>,
     #[allow(dead_code)]
     entities: Interner<Entity<'tu>, EntityId>,
     types: Interner<HashType<'tu>, TypeId>,
-    //def_to_entity: HashMap<Def, Entity<'tu>>,
-    //entity_to_def: HashMap<Entity<'tu>, Def>,
+
+    path_index: RefCell<index::PathIndex<'tu>>,
 }
 
 impl<'tu> ModuleContextInner<'tu> {
-    fn new(
-        _db: &impl SourceFileCache,
-        tu: &'tu TranslationUnit<'tu>,
-        imports: Vec<(Path, Span)>,
-    ) -> Self {
+    fn new(_db: &impl SourceFileCache, tu: &'tu TranslationUnit<'tu>) -> Self {
         ModuleContextInner {
             root: tu.get_entity(),
-            import_paths: imports,
 
             files: Interner::new(),
             entities: Interner::new(),
             types: Interner::new(),
-            //def_to_entity: HashMap::default(),
-            //entity_to_def: HashMap::default(),
+
+            path_index: RefCell::new(index::PathIndex::new(tu)),
         }
     }
 

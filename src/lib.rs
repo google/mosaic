@@ -33,7 +33,9 @@ use structopt::StructOpt;
     libclang::AstMethodsStorage,
     diagnostics::db::SourceFileCacheStorage,
     ir::IrMethodsStorage,
-    ir::cc::RsIrStorage
+    ir::cc::CcSourceBindingsStorage,
+    ir::cc::RsIrStorage,
+    ir::rs::RsTargetStorage
 )]
 pub(crate) struct Database {
     runtime: salsa::Runtime<Database>,
@@ -140,7 +142,10 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
     let (cc_modules, headers) = if let Some("rs") = input_path.extension().and_then(|p| p.to_str())
     {
         sess.db
-            .set_rs_source_root(cc_use::SourceFile::intern_from_path(&sess.db, &input_path)?);
+            .set_rs_source_root(Some(cc_use::SourceFile::intern_from_path(
+                &sess.db,
+                &input_path,
+            )?));
         let (module_ids, errs) = sess.db.module_ids().split();
         errs.emit(&sess.db, &sess.diags);
         let modules = module_ids
@@ -150,6 +155,7 @@ pub fn main() -> Result<i32, Box<dyn std::error::Error>> {
         rs_headers = sess.db.headers().skip_errs();
         (modules, &*rs_headers)
     } else {
+        sess.db.set_rs_source_root(None);
         let include_path = input_path
             .file_name()
             .unwrap()
@@ -202,7 +208,7 @@ fn run_generator(
             errs.to_diagnostics(db).emit(db, diags);
         }
 
-        use ir::cc::RsIr;
+        use ir::rs::RsTarget;
         let rs_module = db.rs_bindings();
         let (rs_module, errs) = rs_module.to_ref().split();
         errs.clone().emit(db, diags);

@@ -1,4 +1,3 @@
-use crate::ir::cc::RsIr;
 use crate::{codegen, diagnostics::Outcome, ir, libclang, Session};
 use clang::{self, TranslationUnit, Unsaved};
 use lazy_static::lazy_static;
@@ -75,10 +74,11 @@ pub(crate) fn parse_and_lower(
 
     let index = libclang::create_index_with(CLANG.clone());
     let module_id = libclang::ModuleId::new(0);
-    let (ast, errs) = libclang::parse_with(&sess.db, &index, module_id, vec![], |index| {
-        parse(index, src)
-    });
+    let (ast, errs) = libclang::parse_with(&sess.db, &index, module_id, |index| parse(index, src));
+    use crate::cc_use::RsSource;
+    sess.db.set_rs_source_root(None);
     let (rust_ir, errs) = libclang::set_ast(&mut sess.db, vec![ast], |db| {
+        use ir::rs::RsTarget;
         Outcome::from_parts((), errs.to_diagnostics(db)).then(|_| Outcome::clone(&db.rs_bindings()))
     })
     .split();

@@ -20,15 +20,18 @@ use syn::{self, spanned::Spanned};
 const MACRO_NAME: &'static str = "cc_use";
 
 #[salsa::query_group(RsSourceStorage)]
-pub(crate) trait RsSource: SourceFileCache {
-    /// The source root of the Rust crate we're generating bindings for.
+pub trait RsSource: SourceFileCache {
+    /// The source root of the Rust crate we're generating bindings for, if any.
     #[salsa::input]
-    fn rs_source_root(&self) -> FileId;
+    fn rs_source_root(&self) -> Option<FileId>;
 
     #[doc(hidden)]
     fn headers_with_imports(&self) -> Arc<Outcome<Vec<HeaderInfo>>>;
 
     /// The range of `ModuleId`s used.
+    ///
+    /// WARNING: This is only useful when using Rust source. `AstMethods` has the method that
+    /// always works.
     fn module_ids(&self) -> Outcome<Arc<[ir::bindings::ModuleId]>>;
 
     /// The set of headers imported in the Rust crate.
@@ -50,7 +53,7 @@ pub(crate) fn cc_module_from_rs(
     index: &libclang::Index,
     module_id: ir::bindings::ModuleId,
 ) -> (libclang::ModuleContext, libclang::ParseErrors) {
-    let rs_source_path = db.rs_source_root().name(db);
+    let rs_source_path = db.rs_source_root().unwrap().name(db);
     let hdrs = db.headers_with_imports();
     // skip_errs okay since the user must go through an outcome with these errors to get module_id.
     let hdr = &hdrs.to_ref().skip_errs()[module_id.as_usize()];
@@ -59,7 +62,6 @@ pub(crate) fn cc_module_from_rs(
         index,
         Path::new(&rs_source_path),
         &hdr.header,
-        &hdr.imports,
         hdr.module_id,
     );
     parse
@@ -67,7 +69,7 @@ pub(crate) fn cc_module_from_rs(
 
 #[doc(hidden)]
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct HeaderInfo {
+pub struct HeaderInfo {
     module_id: ir::bindings::ModuleId,
     header: ir::bindings::Header,
     imports: Vec<ir::bindings::Import>,
@@ -75,7 +77,7 @@ pub(crate) struct HeaderInfo {
 
 // Parse Rust file and return IR imports grouped by header.
 fn headers_with_imports(db: &impl RsSource) -> Arc<Outcome<Vec<HeaderInfo>>> {
-    let file_id = db.rs_source_root();
+    let file_id = db.rs_source_root().unwrap();
     let headers = parse_rs_file(db, &file_id.contents(db), file_id).map(|macros| {
         let mut headers = BTreeMap::new();
         for mac in &macros {
@@ -191,14 +193,9 @@ fn load_cc_module(
     index: &libclang::Index,
     rs_src_path: &Path,
     header: &ir::bindings::Header,
-    imports: &[ir::bindings::Import],
     module_id: ir::bindings::ModuleId,
 ) -> (libclang::ModuleContext, libclang::ParseErrors) {
-    let paths = imports
-        .iter()
-        .map(|imp| (imp.path.clone(), imp.span.clone()))
-        .collect();
-    let (ctx, errs) = libclang::parse_with(db, index, module_id, paths, |index| {
+    let (ctx, errs) = libclang::parse_with(db, index, module_id, |index| {
         let line = header.span.as_ref().map(|_| 1).unwrap(); // TODO
         let src = if header.is_system {
             // TODO: This line directive doesn't have the intended effect. We can either figure

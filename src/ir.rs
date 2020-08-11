@@ -55,14 +55,14 @@ impl Def {
 /// The set of defs that are being imported from one translation unit.
 #[derive(Default, Debug, Eq, PartialEq)]
 pub struct Module {
-    pub exports: Vec<DefKind>,
+    pub items: Vec<DefKind>,
 }
 impl Module {
     pub fn reachable_items<'db>(
         &self,
         db: &'db (impl IrMethods + AstMethods),
     ) -> impl Iterator<Item = DefKind> + 'db {
-        let queue = self.exports.iter().cloned().collect();
+        let queue = self.items.iter().cloned().collect();
         ReachableIter { db, queue }
     }
 
@@ -326,7 +326,7 @@ pub mod bindings {
 
     /// A C++ header file.
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-    pub(crate) struct Header {
+    pub struct Header {
         pub path: String,
         pub is_system: bool,
         pub span: Option<Span>,
@@ -334,7 +334,7 @@ pub mod bindings {
 
     /// An item imported from C++ into Rust.
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-    pub(crate) struct Import {
+    pub struct Import {
         pub mdl: ModuleId,
         pub path: Path,
         pub span: Span,
@@ -344,20 +344,53 @@ pub mod bindings {
 /// C++ intermediate representation.
 pub mod cc {
     use super::*;
-    use crate::{diagnostics::Diagnostics, libclang::AstMethods};
+    use crate::libclang::AstMethods;
     use std::sync::Arc;
 
     pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
+
+    mod bindings {
+        use super::*;
+        use crate::{cc_use::RsSource, diagnostics::Diagnostics};
+
+        #[salsa::query_group(CcSourceBindingsStorage)]
+        pub trait CcModule: AstMethods + RsSource {
+            fn cc_module(&self, mdl: super::super::bindings::ModuleId) -> Outcome<Arc<Module>>;
+        }
+
+        fn cc_module(
+            db: &impl CcModule,
+            mdl: super::super::bindings::ModuleId,
+        ) -> Outcome<Arc<Module>> {
+            let mut diags = Diagnostics::new();
+
+            // Collect entities exported from C++..
+            let (exported, errs) = db.cc_exported_items(mdl).split();
+            diags.append(errs);
+            let mut defs = Vec::from(&*exported);
+
+            // ..and combine with those imported from Rust.
+            if db.rs_source_root().is_some() {
+                let (imports, errs) = db.imports_for(mdl).split();
+                diags.append(errs);
+                for import in imports.iter() {
+                    let (def, errs) = db.cc_item(import.clone()).split();
+                    diags.append(errs);
+                    defs.extend(def.iter().cloned());
+                }
+            }
+
+            Outcome::from_parts(Arc::new(Module { items: defs }), diags)
+        }
+    }
+    pub use bindings::*;
 
     pub trait CcIr: AstMethods {}
     impl<T> CcIr for T where T: AstMethods {}
 
     #[salsa::query_group(RsIrStorage)]
     #[salsa::requires(AstMethods)]
-    #[salsa::requires(IrMethods)]
-    pub trait RsIr {
-        fn rs_bindings(&self) -> Arc<Outcome<rs::BindingsCrate>>;
-
+    pub trait RsIr: bindings::CcModule {
         fn rs_struct_from_cc(&self, id: cc::StructId) -> Outcome<rs::StructId>;
 
         #[salsa::dependencies]
@@ -369,23 +402,6 @@ pub mod cc {
 
     fn rs_type_of(db: &(impl AstMethods + RsIr), ty: TypeRef) -> Outcome<rs::Ty> {
         ty.as_cc(db).then(|ty| ty.to_rust(db))
-    }
-
-    fn rs_bindings(db: &(impl AstMethods + RsIr + IrMethods)) -> Arc<Outcome<rs::BindingsCrate>> {
-        // For now we combine bindings from all cc modules into a single rs module.
-        // They should be separated at some point.
-        let mut diags = Diagnostics::new();
-        let mut module = rs::BindingsCrate::default();
-        for id in db.cc_module_ids() {
-            let (mdl, errs) = db
-                .cc_ir_from_src(id)
-                .to_ref()
-                .then(|ir| ir.to_rs_bindings(db))
-                .split();
-            module.append(mdl);
-            diags.append(errs);
-        }
-        Arc::new(Outcome::from_parts(module, diags))
     }
 
     fn rs_struct_from_cc(db: &(impl AstMethods + RsIr), id: cc::StructId) -> Outcome<rs::StructId> {
@@ -498,13 +514,15 @@ pub mod cc {
             self == &Ty::Error
         }
 
-        pub fn is_visible(&self, db: &impl AstMethods) -> bool {
+        pub(crate) fn is_visible(&self, db: &impl bindings::CcModule) -> bool {
             match self {
                 Ty::Struct(id) => db.cc_module_ids().into_iter().any(|mdl| {
-                    db.cc_ir_from_src(mdl)
+                    // TODO: Use the set of imports and exports, not the full Module, to determine
+                    // visibility.
+                    db.cc_module(mdl)
                         .to_ref()
                         .skip_errs()
-                        .exports
+                        .items
                         .contains(&id.clone().into())
                 }),
                 _ if self.is_builtin() => true,
@@ -608,11 +626,13 @@ pub mod cc {
                         })
                 })
                 .collect::<Outcome<Vec<_>>>();
+            // TODO: Use the set of imports and exports, not the full Module, to determine
+            // visibility.
             let vis = match db
                 .cc_module_ids()
                 .into_iter()
-                .map(|mdl_id| db.cc_ir_from_src(mdl_id))
-                .any(|mdl| mdl.to_ref().skip_errs().exports.contains(&id.into()))
+                .map(|mdl_id| db.cc_module(mdl_id))
+                .any(|mdl| mdl.to_ref().skip_errs().items.contains(&id.into()))
             {
                 true => rs::Visibility::Public,
                 false => rs::Visibility::Private,
@@ -706,6 +726,65 @@ pub mod rs {
 
     pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
 
+    /// Code for bindings targeting Rust.
+    mod bindings {
+        use super::*;
+        use crate::ir;
+        use crate::{cc_use::RsSource, diagnostics::Diagnostics};
+
+        #[salsa::query_group(RsTargetStorage)]
+        pub(crate) trait RsTarget:
+            AstMethods + ir::cc::CcModule + RsSource + RsIr + IrMethods
+        {
+            fn rs_bindings(&self) -> Arc<Outcome<BindingsCrate>>;
+        }
+
+        fn rs_bindings(db: &impl RsTarget) -> Arc<Outcome<BindingsCrate>> {
+            // For now we combine bindings from all cc modules into a single rs module.
+            // They should be separated at some point.
+            let mut diags = Diagnostics::new();
+            let mut module = BindingsCrate::default();
+            for mdl in db.cc_module_ids() {
+                let (mdl, errs) = db
+                    .cc_module(mdl)
+                    .then(|cc_mod| cc_mod.to_rs_bindings(db))
+                    .split();
+                diags.append(errs);
+                module.append(mdl);
+            }
+            Arc::new(Outcome::from_parts(module, diags))
+        }
+
+        /// Represents everything that goes in a bindings crate.
+        ///
+        /// All information that's needed to generate bindings code in both Rust and
+        /// C++ for the crate are accessible from this object.
+        #[derive(Debug, Clone, Eq, PartialEq, Default)]
+        pub struct BindingsCrate {
+            pub items: Vec<ItemKind>,
+        }
+
+        impl BindingsCrate {
+            /// Iterates over all structs that are accessible from outside the
+            /// crate.
+            #[allow(unused)]
+            pub fn visible_structs<'a>(
+                &'a self,
+                db: &'a impl RsIr,
+            ) -> impl Iterator<Item = StructId> + 'a {
+                self.items.iter().filter_map(move |item| match item {
+                    ItemKind::Struct(id) if id.lookup(db).vis.is_public() => Some(*id),
+                    _ => None,
+                })
+            }
+
+            pub fn append(&mut self, mut other: BindingsCrate) {
+                self.items.append(&mut other.items);
+            }
+        }
+    }
+    pub use bindings::*;
+
     intern_key!(StructId);
     impl StructId {
         pub fn lookup(&self, db: &impl cc::RsIr) -> Struct {
@@ -716,34 +795,6 @@ pub mod rs {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
     pub enum ItemKind {
         Struct(StructId),
-    }
-
-    /// Represents everything that goes in a bindings crate.
-    ///
-    /// All information that's needed to generate bindings code in both Rust and
-    /// C++ for the crate are accessible from this object.
-    #[derive(Debug, Clone, Eq, PartialEq, Default)]
-    pub struct BindingsCrate {
-        pub items: Vec<ItemKind>,
-    }
-
-    impl BindingsCrate {
-        /// Iterates over all structs that are accessible from outside the
-        /// crate.
-        #[allow(unused)]
-        pub fn visible_structs<'a>(
-            &'a self,
-            db: &'a impl RsIr,
-        ) -> impl Iterator<Item = StructId> + 'a {
-            self.items.iter().filter_map(move |item| match item {
-                ItemKind::Struct(id) if id.lookup(db).vis.is_public() => Some(*id),
-                _ => None,
-            })
-        }
-
-        pub fn append(&mut self, mut other: BindingsCrate) {
-            self.items.append(&mut other.items);
-        }
     }
 
     /// Represents properties of a Rust type in a #[repr(C)] struct.
@@ -869,6 +920,7 @@ pub mod rs {
     }
 
     pub use cc::{Function, FunctionId};
+    use std::sync::Arc;
 }
 
 #[cfg(test)]

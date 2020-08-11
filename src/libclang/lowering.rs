@@ -9,25 +9,57 @@ use super::{
 use crate::{
     diagnostics::{err, ok, Diagnostic, Diagnostics, Outcome, Span},
     ir::cc::{self, *},
-    ir::{DefKind, Module},
+    ir::{bindings, DefKind},
 };
 use clang::{
     self, Accessibility, Entity, EntityKind, EntityVisitResult, TranslationUnit, Type, TypeKind,
 };
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
-use std::hash::Hash;
-
-pub(super) fn lower_ast(db: &impl AstMethods, mdl: ModuleId) -> Outcome<Module> {
-    with_ast_module(db, mdl, |tu, ast| -> Outcome<Module> {
-        let ctx = LowerCtx { db, mdl, ast };
-        ctx.get_exports(tu).then(|exports| ctx.lower(&exports))
-    })
-}
+use std::{hash::Hash, sync::Arc};
 
 pub(super) fn lower_ty(db: &impl AstMethods, mdl: ModuleId, ty: TypeId) -> Outcome<cc::Ty> {
     with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
         ast.types.lookup(ty).0.lower(&LowerCtx { db, mdl, ast })
+    })
+}
+
+pub(super) fn cc_exported_items(db: &impl AstMethods, mdl: ModuleId) -> Outcome<Arc<[DefKind]>> {
+    with_ast_module(db, mdl, |tu, ast| {
+        let ctx = LowerCtx { db, mdl, ast };
+        ctx.get_exports(tu)
+            .then(|exports| ctx.lower_cc_exports(&exports))
+    })
+}
+
+pub(super) fn cc_item(db: &impl AstMethods, import: bindings::Import) -> Outcome<Option<DefKind>> {
+    with_ast_module(db, import.mdl, |_tu, ast| {
+        let ctx = LowerCtx {
+            db,
+            mdl: import.mdl,
+            ast,
+        };
+        let mut index = ast.path_index.borrow_mut();
+        let mut exports = vec![];
+        let mut indices = HashMap::new();
+        let errs = Diagnostics::build(|mut diags| {
+            ctx.handle_rust_import(
+                &import.path,
+                &import.span,
+                &mut index,
+                &mut exports,
+                &mut indices,
+                &mut diags,
+            );
+        });
+        assert!(exports.len() <= 1);
+        Outcome::from_parts(exports, errs).then(|exports| {
+            exports
+                .iter()
+                .next()
+                .map(|item| ctx.lower(item))
+                .unwrap_or(ok(None))
+        })
     })
 }
 
@@ -68,18 +100,6 @@ impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
                         }
                     }
                 }
-            }
-
-            let mut index = index::PathIndex::new(tu);
-            for (path, span) in &self.ast.import_paths {
-                self.handle_rust_import(
-                    path,
-                    span,
-                    &mut index,
-                    &mut exports,
-                    &mut indices,
-                    &mut diags,
-                );
             }
         });
 
@@ -181,45 +201,52 @@ impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
 }
 
 impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
-    fn lower(&self, exports: &Vec<Export<'tu>>) -> Outcome<Module> {
-        //let mut visitor = AstVisitor::new(&self);
-        let mut outcome = ok(());
-        let mut mdl = Module::default();
+    /// Lowers the set of items in the `rust_export` namespace in C++.
+    fn lower_cc_exports(&self, exports: &[Export<'tu>]) -> Outcome<Arc<[DefKind]>> {
+        let mut items = vec![];
         let mut export_set = HashSet::new();
+        let mut diags = Diagnostics::new();
         for export in exports {
-            outcome = outcome.then(|()| {
-                self.lower_export(&export.name, &export.kind, &mut mdl, &mut export_set)
-            });
+            let (def, errs) = self
+                .lower_export(&export.name, &export.kind, Some(&mut export_set))
+                .split();
+            items.extend(def.into_iter());
+            diags.append(errs);
         }
-        outcome.then(|()| ok(mdl))
+        Outcome::from_parts(items.into(), diags)
+    }
+
+    fn lower(&self, export: &Export<'tu>) -> Outcome<Option<DefKind>> {
+        self.lower_export(&export.name, &export.kind, None)
     }
 
     fn lower_export(
         &self,
         name: &Path,
         export: &ExportKind<'tu>,
-        mdl: &mut Module,
-        export_set: &mut HashSet<DefKind>,
-    ) -> Outcome<()> {
+        export_set: Option<&mut HashSet<DefKind>>,
+    ) -> Outcome<Option<DefKind>> {
         match export {
             ExportKind::Decl(decl_ref) => self.lower_decl(name, *decl_ref).then(|item| {
                 if let Some(kind) = item {
                     let def = DefKind::CcDef(kind);
-                    if !export_set.insert(def.clone()) {
-                        // TODO we should represent this as unique aliases to
-                        // the same item, so we can't have "duplicate" exports.
-                        //return err(
-                        //    (),
-                        //    Diagnostic::error(
-                        //        "multiple exports of the same item are not supported",
-                        //        self.span(*decl_ref)
-                        //            .label("this item has already been exported"),
-                        //    ),
-                        //);
+                    if let Some(set) = export_set {
+                        if !set.insert(def.clone()) {
+                            // TODO we should represent this as unique aliases to
+                            // the same item, so we can't have "duplicate" exports.
+                            return err(
+                                None,
+                                Diagnostic::error(
+                                    "multiple exports of the same item are not supported",
+                                    self.span(*decl_ref)
+                                        .label("this item has already been exported"),
+                                ),
+                            );
+                        }
                     }
-                    mdl.exports.push(def);
+                    return ok(Some(def));
                 }
-                ok(())
+                ok(None)
             }),
             ExportKind::Type(ty) => {
                 println!("{} = {:?}", name, ty);
@@ -229,7 +256,7 @@ impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
                         .unwrap() // TODO hack
                         .get_template_argument_types()
                 );
-                ok(())
+                ok(None)
             }
             ExportKind::TemplateType(t) => {
                 println!("{} = {:?}", name, t);
@@ -249,7 +276,7 @@ impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
                         _ => println!("  unknown child {:?}", child),
                     }
                 }
-                ok(())
+                ok(None)
             }
         }
     }

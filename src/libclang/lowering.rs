@@ -512,3 +512,26 @@ impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::Session;
+
+    #[test]
+    fn multiple_exports() {
+        let mut sess = Session::test();
+        cpp_lower!(sess, {
+            struct Foo {
+                int a;
+            };
+            namespace rust_export {
+                using ::Foo;
+            }
+            namespace rust_export {
+                using ::Foo;
+            }
+        } => [
+            "multiple exports of the same item are not supported"
+        ]);
+    }
+}

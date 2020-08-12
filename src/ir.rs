@@ -984,38 +984,6 @@ mod tests {
     }
 
     #[test]
-    fn packed() {
-        let mut sess = Session::test();
-        cpp_lower!(sess, {
-            struct __attribute__((__packed__)) Pod {
-                int a, b;
-                char c, d;
-                double e, f;
-            };
-            namespace rust_export {
-                using ::Pod;
-            }
-        } => [
-            "packed structs not supported"
-        ]);
-    }
-
-    #[test]
-    fn bitfields() {
-        let mut sess = Session::test();
-        cpp_lower!(sess, {
-            struct Pod {
-                int a : 3, b : 2;
-            };
-            namespace rust_export {
-                using ::Pod;
-            }
-        } => [
-            "bitfields are not supported"
-        ]);
-    }
-
-    #[test]
     fn nested_struct() {
         let mut sess = Session::new();
         let ir = cpp_lower!(sess, {
@@ -1055,22 +1023,5 @@ mod tests {
         let st = ir.visible_structs(db).next().unwrap().lookup(db);
         assert_eq!(rs::Size::new(16), st.size);
         assert_eq!(rs::Align::new(8), st.align);
-    }
-
-    // TODO don't panic and report clang diagnostics
-    #[test]
-    #[should_panic]
-    fn bad_export() {
-        let mut sess = Session::test();
-        cpp_lower!(sess, {
-            struct Pod {
-                int a;
-            };
-            namespace rust_export {
-                using ::Missing;
-            }
-        } => [
-            "unknown name"
-        ]);
     }
 }

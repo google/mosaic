@@ -534,4 +534,53 @@ mod tests {
             "multiple exports of the same item are not supported"
         ]);
     }
+
+    #[test]
+    fn missing_export() {
+        let mut sess = Session::test();
+        cpp_lower!(sess, {
+            struct Pod {
+                int a;
+            };
+            namespace rust_export {
+                using ::Missing;
+            }
+        } => [
+            "no member named 'Missing' in the global namespace",
+            // TODO
+            "unsupported item type OverloadedDeclRef"
+        ]);
+    }
+
+    #[test]
+    fn packed() {
+        let mut sess = Session::test();
+        cpp_lower!(sess, {
+            struct __attribute__((__packed__)) Pod {
+                int a, b;
+                char c, d;
+                double e, f;
+            };
+            namespace rust_export {
+                using ::Pod;
+            }
+        } => [
+            "packed structs not supported"
+        ]);
+    }
+
+    #[test]
+    fn bitfields() {
+        let mut sess = Session::test();
+        cpp_lower!(sess, {
+            struct Pod {
+                int a : 3, b : 2;
+            };
+            namespace rust_export {
+                using ::Pod;
+            }
+        } => [
+            "bitfields are not supported"
+        ]);
+    }
 }

@@ -17,6 +17,7 @@ use std::path;
 use std::sync::Arc;
 
 pub(crate) use diagnostics::{ParseErrors, SourceFile};
+use ir::DefIr;
 
 pub(crate) fn create_index() -> Index {
     create_index_with(Arc::new(Clang::new().unwrap()))
@@ -86,7 +87,7 @@ pub(crate) fn set_ast<R>(
 }
 
 fn with_ast_module<R>(
-    db: &impl AstContext,
+    db: &impl CcSource,
     mdl: ModuleId,
     f: impl for<'tu> FnOnce(&'tu TranslationUnit<'tu>, &'_ ModuleContextInner<'tu>) -> R,
 ) -> R {
@@ -100,14 +101,20 @@ fn with_ast_module<R>(
     })
 }
 
-#[salsa::query_group(AstContextStorage)]
-pub trait AstContext {
+/// Provides access to C++ source files and their AST.
+#[salsa::query_group(CcSourceStorage)]
+pub trait CcSource {
+    /// The [`ModuleContext`] holds the source file contents and their AST.
+    ///
+    /// This query does not actually return the context; instead, it exists to track uses of the
+    /// context from [`with_ast_module`]. Use that function to gain access to the context.
     #[salsa::dependencies]
     fn ast_context(&self) -> ();
 }
 
-#[salsa::query_group(AstMethodsStorage)]
-pub trait AstMethods: AstContext + SourceFileCache {
+/// Generates source IR for C++.
+#[salsa::query_group(CcSourceIrStorage)]
+pub trait CcSourceIr: CcSource + DefIr + SourceFileCache {
     fn cc_module_ids(&self) -> Vec<ModuleId>;
 
     #[salsa::invoke(lowering::cc_exported_items)]
@@ -126,12 +133,12 @@ pub trait AstMethods: AstContext + SourceFileCache {
     fn intern_cc_fn(&self, func: Arc<Outcome<ir::cc::Function>>) -> ir::cc::FunctionId;
 }
 
-fn ast_context(db: &(impl AstContext + salsa::Database)) {
+fn ast_context(db: &(impl CcSource + salsa::Database)) {
     db.salsa_runtime()
         .report_synthetic_read(salsa::Durability::LOW);
 }
 
-fn cc_module_ids(db: &impl AstMethods) -> Vec<ModuleId> {
+fn cc_module_ids(db: &impl CcSourceIr) -> Vec<ModuleId> {
     // Report that we're reading the ast context.
     db.ast_context();
     AST_CONTEXT.with(|ctx| {

@@ -1,7 +1,7 @@
 //! Utilities for converting from clang diagnostics and source objects to their
 //! [`crate::diagnostics`] equivalents.
 
-use super::{with_ast_module, AstContext, LocalFileId, ModuleContextInner, ModuleId};
+use super::{with_ast_module, CcSource, LocalFileId, ModuleContextInner, ModuleId};
 use crate::diagnostics::{db::SourceFileCache, Diagnostic, Diagnostics, Span};
 use crate::SourceFileKind;
 use clang::{source::SourceRange, Entity};
@@ -14,7 +14,7 @@ pub struct SourceFile {
     file: LocalFileId,
 }
 impl SourceFile {
-    pub(crate) fn get_name_and_contents(&self, db: &impl AstContext) -> (String, String) {
+    pub(crate) fn get_name_and_contents(&self, db: &impl CcSource) -> (String, String) {
         with_ast_module(db, self.module, |_, ctx| {
             let file = ctx.files.lookup(self.file);
             (
@@ -31,7 +31,7 @@ impl SourceFile {
 // We don't actually store the diagnostics here, just the ModuleId so they can be retrieved later.
 pub struct ParseErrors(pub(super) ModuleId);
 impl ParseErrors {
-    pub fn to_diagnostics(self, db: &(impl AstContext + SourceFileCache)) -> Diagnostics {
+    pub fn to_diagnostics(self, db: &(impl CcSource + SourceFileCache)) -> Diagnostics {
         with_ast_module(db, self.0, |tu, ast| {
             Diagnostics::build(|errs| {
                 for err in tu.get_diagnostics() {

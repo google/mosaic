@@ -16,7 +16,7 @@ mod diagnostics;
 mod ir;
 mod libclang;
 
-use cc_use::RsSource;
+use cc_use::{RsImportIr, RsSource};
 use diagnostics::DiagnosticsCtx;
 
 use salsa;
@@ -28,14 +28,15 @@ use std::{
 use structopt::StructOpt;
 
 #[salsa::database(
-    cc_use::RsSourceStorage,
-    libclang::AstContextStorage,
-    libclang::AstMethodsStorage,
     diagnostics::db::SourceFileCacheStorage,
-    ir::IrMethodsStorage,
-    ir::cc::CcSourceBindingsStorage,
-    ir::cc::RsIrStorage,
-    ir::rs::RsTargetStorage
+    cc_use::RsSourceStorage,
+    cc_use::RsImportIrStorage,
+    libclang::CcSourceStorage,
+    libclang::CcSourceIrStorage,
+    ir::DefIrStorage,
+    ir::cc::CcModuleStorage,
+    ir::cc::RsTargetIrStorage,
+    ir::rs::RsTargetBindingsStorage
 )]
 pub(crate) struct Database {
     runtime: salsa::Runtime<Database>,
@@ -54,7 +55,7 @@ impl SourceFileKind {
         }
     }
 }
-pub trait SourceFileLookup: libclang::AstContext {}
+pub trait SourceFileLookup: libclang::CcSource {}
 impl SourceFileLookup for Database {}
 
 impl salsa::Database for Database {
@@ -208,7 +209,7 @@ fn run_generator(
             errs.to_diagnostics(db).emit(db, diags);
         }
 
-        use ir::rs::RsTarget;
+        use ir::rs::RsTargetBindings;
         let rs_module = db.rs_bindings();
         let (rs_module, errs) = rs_module.to_ref().split();
         errs.clone().emit(db, diags);

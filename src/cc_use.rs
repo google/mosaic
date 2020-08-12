@@ -19,12 +19,17 @@ use syn::{self, spanned::Spanned};
 
 const MACRO_NAME: &'static str = "cc_use";
 
+/// Provides access to Rust source files.
 #[salsa::query_group(RsSourceStorage)]
 pub trait RsSource: SourceFileCache {
     /// The source root of the Rust crate we're generating bindings for, if any.
     #[salsa::input]
     fn rs_source_root(&self) -> Option<FileId>;
+}
 
+/// Generates IR for `cc_use!` imports in Rust source.
+#[salsa::query_group(RsImportIrStorage)]
+pub trait RsImportIr: RsSource {
     #[doc(hidden)]
     fn headers_with_imports(&self) -> Arc<Outcome<Vec<HeaderInfo>>>;
 
@@ -42,14 +47,12 @@ pub trait RsSource: SourceFileCache {
 
     /// The set of (top-level) imports in the Rust crate for a given `ModuleId`.
     fn imports_for(&self, mdl: ir::bindings::ModuleId) -> Outcome<Arc<[ir::bindings::Import]>>;
-
-    // Then add `fn def(&self, mdl: ModuleId, item: ir::Path) -> ir::Def` to AstMethods
 }
 
 /// Parses the C++ header file for the given `ModuleId`.
 // This should probably be a query, but the libclang types don't easily go in salsa.
 pub(crate) fn cc_module_from_rs(
-    db: &impl RsSource,
+    db: &impl RsImportIr,
     index: &libclang::Index,
     module_id: ir::bindings::ModuleId,
 ) -> (libclang::ModuleContext, libclang::ParseErrors) {
@@ -76,7 +79,7 @@ pub struct HeaderInfo {
 }
 
 // Parse Rust file and return IR imports grouped by header.
-fn headers_with_imports(db: &impl RsSource) -> Arc<Outcome<Vec<HeaderInfo>>> {
+fn headers_with_imports(db: &impl RsImportIr) -> Arc<Outcome<Vec<HeaderInfo>>> {
     let file_id = db.rs_source_root().unwrap();
     let headers = parse_rs_file(db, &file_id.contents(db), file_id).map(|macros| {
         let mut headers = BTreeMap::new();
@@ -119,7 +122,7 @@ fn headers_with_imports(db: &impl RsSource) -> Arc<Outcome<Vec<HeaderInfo>>> {
     Arc::new(headers)
 }
 
-fn module_ids(db: &impl RsSource) -> Outcome<Arc<[ir::bindings::ModuleId]>> {
+fn module_ids(db: &impl RsImportIr) -> Outcome<Arc<[ir::bindings::ModuleId]>> {
     db.headers_with_imports().to_ref().map(|hdrs| {
         (0..(hdrs.len() as _))
             .map(ir::bindings::ModuleId::new)
@@ -127,13 +130,13 @@ fn module_ids(db: &impl RsSource) -> Outcome<Arc<[ir::bindings::ModuleId]>> {
     })
 }
 
-fn headers(db: &impl RsSource) -> Outcome<Arc<[ir::bindings::Header]>> {
+fn headers(db: &impl RsImportIr) -> Outcome<Arc<[ir::bindings::Header]>> {
     db.headers_with_imports()
         .to_ref()
         .map(|data| data.iter().map(|hdr| hdr.header.clone()).collect())
 }
 
-fn imports(db: &impl RsSource) -> Outcome<Arc<[ir::bindings::Import]>> {
+fn imports(db: &impl RsImportIr) -> Outcome<Arc<[ir::bindings::Import]>> {
     db.headers_with_imports().to_ref().map(|data| {
         data.iter()
             .flat_map(|hdr| hdr.imports.iter().cloned())
@@ -142,7 +145,7 @@ fn imports(db: &impl RsSource) -> Outcome<Arc<[ir::bindings::Import]>> {
 }
 
 fn imports_for(
-    db: &impl RsSource,
+    db: &impl RsImportIr,
     mdl: ir::bindings::ModuleId,
 ) -> Outcome<Arc<[ir::bindings::Import]>> {
     db.headers_with_imports().to_ref().map(|data| {

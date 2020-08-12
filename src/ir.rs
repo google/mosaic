@@ -9,14 +9,14 @@
 //! language IR can be represented in the other.
 
 use crate::diagnostics::{err, ok, Diagnostic, Outcome, Span};
-use crate::libclang::AstMethods;
+use crate::libclang::CcSourceIr;
 use itertools::Itertools;
 use std::collections::VecDeque;
 use std::num::NonZeroU16;
 use std::{fmt, iter};
 
-#[salsa::query_group(IrMethodsStorage)]
-pub trait IrMethods {
+#[salsa::query_group(DefIrStorage)]
+pub trait DefIr {
     #[salsa::interned]
     fn intern_def(&self, def: DefKind) -> Def;
 }
@@ -47,7 +47,7 @@ impl From<cc::StructId> for DefKind {
 intern_key!(Def);
 impl Def {
     #[allow(unused)]
-    pub fn lookup(&self, db: &impl IrMethods) -> DefKind {
+    pub fn lookup(&self, db: &impl DefIr) -> DefKind {
         db.lookup_intern_def(*self)
     }
 }
@@ -60,7 +60,7 @@ pub struct Module {
 impl Module {
     pub fn reachable_items<'db>(
         &self,
-        db: &'db (impl IrMethods + AstMethods),
+        db: &'db (impl DefIr + CcSourceIr),
     ) -> impl Iterator<Item = DefKind> + 'db {
         let queue = self.items.iter().cloned().collect();
         ReachableIter { db, queue }
@@ -68,7 +68,7 @@ impl Module {
 
     pub fn to_rs_bindings(
         &self,
-        db: &(impl IrMethods + cc::RsIr + AstMethods),
+        db: &(impl DefIr + cc::RsTargetIr + CcSourceIr),
     ) -> Outcome<rs::BindingsCrate> {
         self.reachable_items(db)
             .map(|def| {
@@ -88,16 +88,16 @@ impl Module {
     }
 }
 
-struct ReachableIter<'db, DB: IrMethods + AstMethods> {
+struct ReachableIter<'db, DB: CcSourceIr> {
     db: &'db DB,
     queue: VecDeque<DefKind>,
 }
-impl<'db, DB: IrMethods + AstMethods> Iterator for ReachableIter<'db, DB> {
+impl<'db, DB: DefIr + CcSourceIr> Iterator for ReachableIter<'db, DB> {
     type Item = DefKind;
     fn next<'a>(&'a mut self) -> Option<Self::Item> {
         let item = self.queue.pop_front()?;
         struct ReachableVisitor<'a>(&'a mut VecDeque<DefKind>);
-        impl<'a, DB: IrMethods + AstMethods> Visitor<DB> for ReachableVisitor<'a> {
+        impl<'a, DB: CcSourceIr + DefIr> Visitor<DB> for ReachableVisitor<'a> {
             fn visit_item(&mut self, _db: &DB, item: &DefKind) {
                 debug_assert!(!self.0.contains(item));
                 self.0.push_back(item.clone());
@@ -108,7 +108,7 @@ impl<'db, DB: IrMethods + AstMethods> Iterator for ReachableIter<'db, DB> {
     }
 }
 
-trait Visitor<DB: IrMethods + AstMethods> {
+trait Visitor<DB: DefIr + CcSourceIr> {
     //fn visit_def(&mut self, db: &DB, def: Def) {
     //    self.super_visit_def(db, def);
     //}
@@ -309,10 +309,10 @@ mod common {
         pub(crate) fn new(mdl: libclang::ModuleId, id: libclang::TypeId) -> Self {
             TypeRef(mdl, id)
         }
-        pub fn as_cc(&self, db: &impl AstMethods) -> Outcome<cc::Ty> {
+        pub fn as_cc(&self, db: &impl CcSourceIr) -> Outcome<cc::Ty> {
             db.type_of(self.0, self.1)
         }
-        pub fn as_rs(&self, db: &impl cc::RsIr) -> Outcome<rs::Ty> {
+        pub fn as_rs(&self, db: &impl cc::RsTargetIr) -> Outcome<rs::Ty> {
             db.rs_type_of(self.clone())
         }
     }
@@ -344,17 +344,17 @@ pub mod bindings {
 /// C++ intermediate representation.
 pub mod cc {
     use super::*;
-    use crate::libclang::AstMethods;
+    use crate::libclang::CcSourceIr;
     use std::sync::Arc;
 
     pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
 
     mod bindings {
         use super::*;
-        use crate::{cc_use::RsSource, diagnostics::Diagnostics};
+        use crate::{cc_use::RsImportIr, diagnostics::Diagnostics};
 
-        #[salsa::query_group(CcSourceBindingsStorage)]
-        pub trait CcModule: AstMethods + RsSource {
+        #[salsa::query_group(CcModuleStorage)]
+        pub trait CcModule: CcSourceIr + RsImportIr {
             fn cc_module(&self, mdl: super::super::bindings::ModuleId) -> Outcome<Arc<Module>>;
         }
 
@@ -385,12 +385,8 @@ pub mod cc {
     }
     pub use bindings::*;
 
-    pub trait CcIr: AstMethods {}
-    impl<T> CcIr for T where T: AstMethods {}
-
-    #[salsa::query_group(RsIrStorage)]
-    #[salsa::requires(AstMethods)]
-    pub trait RsIr: bindings::CcModule {
+    #[salsa::query_group(RsTargetIrStorage)]
+    pub trait RsTargetIr: CcSourceIr + CcModule {
         fn rs_struct_from_cc(&self, id: cc::StructId) -> Outcome<rs::StructId>;
 
         #[salsa::dependencies]
@@ -400,11 +396,14 @@ pub mod cc {
         fn intern_struct(&self, st: rs::Struct) -> rs::StructId;
     }
 
-    fn rs_type_of(db: &(impl AstMethods + RsIr), ty: TypeRef) -> Outcome<rs::Ty> {
+    fn rs_type_of(db: &(impl CcSourceIr + RsTargetIr), ty: TypeRef) -> Outcome<rs::Ty> {
         ty.as_cc(db).then(|ty| ty.to_rust(db))
     }
 
-    fn rs_struct_from_cc(db: &(impl AstMethods + RsIr), id: cc::StructId) -> Outcome<rs::StructId> {
+    fn rs_struct_from_cc(
+        db: &(impl CcSourceIr + RsTargetIr),
+        id: cc::StructId,
+    ) -> Outcome<rs::StructId> {
         id.lookup(db)
             .to_rust(db, id)
             .then(|rs_st| ok(db.intern_struct(rs_st)))
@@ -412,7 +411,7 @@ pub mod cc {
 
     intern_key!(StructId);
     impl StructId {
-        pub fn lookup(&self, db: &impl AstMethods) -> Struct {
+        pub fn lookup(&self, db: &impl CcSourceIr) -> Struct {
             db.lookup_intern_cc_struct(*self)
         }
     }
@@ -420,7 +419,7 @@ pub mod cc {
     intern_key!(FunctionId);
     impl FunctionId {
         #[allow(unused)]
-        pub fn lookup(&self, db: &impl AstMethods) -> Arc<Outcome<Function>> {
+        pub fn lookup(&self, db: &impl CcSourceIr) -> Arc<Outcome<Function>> {
             db.lookup_intern_cc_fn(*self)
         }
     }
@@ -531,7 +530,7 @@ pub mod cc {
             }
         }
 
-        pub fn to_rust(&self, db: &impl RsIr) -> Outcome<rs::Ty> {
+        pub fn to_rust(&self, db: &impl RsTargetIr) -> Outcome<rs::Ty> {
             //use salsa::InternKey;
             use Ty::*;
             ok(match self {
@@ -590,19 +589,23 @@ pub mod cc {
         pub is_const: bool,
     }
     impl Function {
-        pub fn param_tys<'a>(&'a self, db: &'a impl CcIr) -> impl Iterator<Item = Ty> + 'a {
+        pub fn param_tys<'a>(&'a self, db: &'a impl CcSourceIr) -> impl Iterator<Item = Ty> + 'a {
             // skip_errs okay because errors get collected by Struct::to_rust()
             self.param_tys
                 .iter()
                 .map(move |ty_ref| ty_ref.as_cc(db).skip_errs())
         }
-        pub fn return_ty(&self, db: &impl CcIr) -> Ty {
+        pub fn return_ty(&self, db: &impl CcSourceIr) -> Ty {
             self.return_ty.as_cc(db).skip_errs()
         }
     }
 
     impl Struct {
-        pub fn to_rust(&self, db: &(impl RsIr + AstMethods), id: StructId) -> Outcome<rs::Struct> {
+        pub fn to_rust(
+            &self,
+            db: &(impl RsTargetIr + CcSourceIr),
+            id: StructId,
+        ) -> Outcome<rs::Struct> {
             let fields = self
                 .fields
                 .iter()
@@ -663,7 +666,7 @@ pub mod cc {
                 })
         }
 
-        fn check_offsets(&self, db: &impl RsIr, fields: &Vec<rs::Field>) -> Outcome<()> {
+        fn check_offsets(&self, db: &impl RsTargetIr, fields: &Vec<rs::Field>) -> Outcome<()> {
             let mut offset = 0;
             let mut align = self.align;
             assert_eq!(self.fields.len(), self.offsets.len());
@@ -722,24 +725,22 @@ pub mod cc {
 /// Rust intermediate representation.
 pub mod rs {
     use super::*;
-    use cc::RsIr;
+    use cc::RsTargetIr;
 
     pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
 
     /// Code for bindings targeting Rust.
     mod bindings {
         use super::*;
-        use crate::ir;
-        use crate::{cc_use::RsSource, diagnostics::Diagnostics};
+        use crate::diagnostics::Diagnostics;
+        use cc::CcModule;
 
-        #[salsa::query_group(RsTargetStorage)]
-        pub(crate) trait RsTarget:
-            AstMethods + ir::cc::CcModule + RsSource + RsIr + IrMethods
-        {
+        #[salsa::query_group(RsTargetBindingsStorage)]
+        pub(crate) trait RsTargetBindings: RsTargetIr + CcModule {
             fn rs_bindings(&self) -> Arc<Outcome<BindingsCrate>>;
         }
 
-        fn rs_bindings(db: &impl RsTarget) -> Arc<Outcome<BindingsCrate>> {
+        fn rs_bindings(db: &impl RsTargetBindings) -> Arc<Outcome<BindingsCrate>> {
             // For now we combine bindings from all cc modules into a single rs module.
             // They should be separated at some point.
             let mut diags = Diagnostics::new();
@@ -770,7 +771,7 @@ pub mod rs {
             #[allow(unused)]
             pub fn visible_structs<'a>(
                 &'a self,
-                db: &'a impl RsIr,
+                db: &'a impl RsTargetIr,
             ) -> impl Iterator<Item = StructId> + 'a {
                 self.items.iter().filter_map(move |item| match item {
                     ItemKind::Struct(id) if id.lookup(db).vis.is_public() => Some(*id),
@@ -787,7 +788,7 @@ pub mod rs {
 
     intern_key!(StructId);
     impl StructId {
-        pub fn lookup(&self, db: &impl cc::RsIr) -> Struct {
+        pub fn lookup(&self, db: &impl cc::RsTargetIr) -> Struct {
             db.lookup_intern_struct(*self)
         }
     }
@@ -822,7 +823,7 @@ pub mod rs {
     }
 
     impl Ty {
-        pub fn size(&self, db: &impl RsIr) -> Size {
+        pub fn size(&self, db: &impl RsTargetIr) -> Size {
             use Ty::*;
             let sz = match self {
                 Error => 0,
@@ -841,7 +842,7 @@ pub mod rs {
             Size::new(sz)
         }
 
-        pub fn align(&self, db: &impl RsIr) -> Align {
+        pub fn align(&self, db: &impl RsTargetIr) -> Align {
             match self {
                 Ty::Struct(id) => id.lookup(db).align,
                 // TODO make target dependent. this assumes x86_64
@@ -869,7 +870,7 @@ pub mod rs {
         pub vis: Visibility,
     }
     impl Field {
-        pub fn ty(&self, db: &impl RsIr) -> Ty {
+        pub fn ty(&self, db: &impl RsTargetIr) -> Ty {
             // skip_errs okay since we collect errors in `cc::Struct::to_rust`
             // when this Field is created.
             self.ty.as_rs(db).skip_errs()
@@ -904,17 +905,17 @@ pub mod rs {
         pub fn func(&self) -> &Function {
             &self.0
         }
-        pub fn param_tys<'a>(&'a self, db: &'a impl RsIr) -> impl Iterator<Item = Ty> + 'a {
+        pub fn param_tys<'a>(&'a self, db: &'a impl RsTargetIr) -> impl Iterator<Item = Ty> + 'a {
             // skip_errs is okay because we check method types in Struct::to_rust above.
             self.0
                 .param_tys
                 .iter()
                 .map(move |ty_ref| ty_ref.as_rs(db).skip_errs())
         }
-        pub fn return_ty(&self, db: &impl RsIr) -> Ty {
+        pub fn return_ty(&self, db: &impl RsTargetIr) -> Ty {
             self.0.return_ty.as_rs(db).skip_errs()
         }
-        pub fn cc_func(&self, _db: &impl RsIr) -> cc::Function {
+        pub fn cc_func(&self, _db: &impl RsTargetIr) -> cc::Function {
             self.0.clone()
         }
     }

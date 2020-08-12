@@ -78,7 +78,7 @@ pub(crate) fn parse_and_lower(
     use crate::cc_use::RsSource;
     sess.db.set_rs_source_root(None);
     let (rust_ir, errs) = libclang::set_ast(&mut sess.db, vec![ast], |db| {
-        use ir::rs::RsTarget;
+        use ir::rs::RsTargetBindings;
         Outcome::from_parts((), errs.to_diagnostics(db)).then(|_| Outcome::clone(&db.rs_bindings()))
     })
     .split();

@@ -2,8 +2,14 @@
 
 #![cfg_attr(rustfmt, rustfmt::skip::macros(write_gen))]
 
-use crate::ir::cc::{CcIr, RsIr};
-use crate::ir::{bindings, cc, rs};
+use crate::{
+    ir::{
+        bindings,
+        cc::{self, RsTargetIr},
+        rs::{self, RsTargetBindings},
+    },
+    libclang::CcSourceIr,
+};
 use gen_macro::{snippet, write_gen, Gen, Snippet};
 use itertools::Itertools;
 use std::io::{self, Write};
@@ -18,7 +24,7 @@ pub(crate) struct Outputs<'a> {
 
 #[rustfmt::skip::macros(write_gen)]
 pub(crate) fn perform_codegen(
-    db: &(impl RsIr + CcIr),
+    db: &impl RsTargetBindings,
     mdl: &rs::BindingsCrate,
     headers: &[bindings::Header],
     skip_header: bool,
@@ -56,7 +62,7 @@ pub(crate) fn perform_codegen(
     Ok(())
 }
 
-impl<DB: RsIr> Gen<DB> for rs::Visibility {
+impl<DB: RsTargetIr> Gen<DB> for rs::Visibility {
     fn gen(&self, _db: &DB, f: &mut CodeWriter) -> io::Result<()> {
         Ok(match self {
             rs::Visibility::Public => write!(f, "pub ")?,
@@ -66,7 +72,11 @@ impl<DB: RsIr> Gen<DB> for rs::Visibility {
 }
 
 #[rustfmt::skip::macros(write_gen)]
-fn gen_struct(db: &(impl RsIr + CcIr), st: &rs::Struct, out: &mut Outputs<'_>) -> io::Result<()> {
+fn gen_struct(
+    db: &impl RsTargetBindings,
+    st: &rs::Struct,
+    out: &mut Outputs<'_>,
+) -> io::Result<()> {
     if let Some(rs) = out.rs.as_mut() {
         let rs::Struct {
             vis, name, align, ..
@@ -99,7 +109,7 @@ fn gen_struct(db: &(impl RsIr + CcIr), st: &rs::Struct, out: &mut Outputs<'_>) -
 
 #[rustfmt::skip::macros(write_gen)]
 fn gen_method(
-    db: &(impl RsIr + CcIr),
+    db: &impl RsTargetBindings,
     st: &rs::Struct,
     meth: &rs::Method,
     out: &mut Outputs<'_>,
@@ -190,10 +200,10 @@ fn arg_names(meth: &rs::Method) -> Vec<rs::Ident> {
 
 /// Convenience trait to hide lifetime param.
 trait DbRef: Copy {
-    type DB: RsIr;
+    type DB: RsTargetIr;
     fn get(&self) -> &Self::DB;
 }
-impl<DB: RsIr> DbRef for &'_ DB {
+impl<DB: RsTargetIr> DbRef for &'_ DB {
     type DB = DB;
     fn get(&self) -> &DB {
         &*self
@@ -214,7 +224,7 @@ impl_gen_from_display!(rs::Align);
 impl_gen_from_display!(rs::Ident);
 impl_gen_from_display!(rs::Path);
 
-impl<DB: RsIr> Gen<DB> for rs::Ty {
+impl<DB: RsTargetIr> Gen<DB> for rs::Ty {
     fn gen(&self, db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
         use rs::Ty::*;
         let name = match self {
@@ -239,7 +249,7 @@ impl<DB: RsIr> Gen<DB> for rs::Ty {
     }
 }
 
-impl<DB: CcIr> Gen<DB> for cc::Ty {
+impl<DB: CcSourceIr> Gen<DB> for cc::Ty {
     fn gen(&self, db: &DB, f: &mut CodeWriter<'_>) -> io::Result<()> {
         use cc::Ty::*;
         let name = match self {

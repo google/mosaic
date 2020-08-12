@@ -3,7 +3,7 @@
 //! The entry point for all code in this module is lowering queries (declared in libclang::db).
 
 use super::{
-    diagnostics::span_for_entity, index, with_ast_module, AstMethods, HashType, ModuleContextInner,
+    diagnostics::span_for_entity, index, with_ast_module, CcSourceIr, HashType, ModuleContextInner,
     ModuleId, TypeId,
 };
 use crate::{
@@ -18,13 +18,13 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::{hash::Hash, sync::Arc};
 
-pub(super) fn lower_ty(db: &impl AstMethods, mdl: ModuleId, ty: TypeId) -> Outcome<cc::Ty> {
+pub(super) fn lower_ty(db: &impl CcSourceIr, mdl: ModuleId, ty: TypeId) -> Outcome<cc::Ty> {
     with_ast_module(db, mdl, |_tu, ast| -> Outcome<cc::Ty> {
         ast.types.lookup(ty).0.lower(&LowerCtx { db, mdl, ast })
     })
 }
 
-pub(super) fn cc_exported_items(db: &impl AstMethods, mdl: ModuleId) -> Outcome<Arc<[DefKind]>> {
+pub(super) fn cc_exported_items(db: &impl CcSourceIr, mdl: ModuleId) -> Outcome<Arc<[DefKind]>> {
     with_ast_module(db, mdl, |tu, ast| {
         let ctx = LowerCtx { db, mdl, ast };
         ctx.get_exports(tu)
@@ -32,7 +32,7 @@ pub(super) fn cc_exported_items(db: &impl AstMethods, mdl: ModuleId) -> Outcome<
     })
 }
 
-pub(super) fn cc_item(db: &impl AstMethods, import: bindings::Import) -> Outcome<Option<DefKind>> {
+pub(super) fn cc_item(db: &impl CcSourceIr, import: bindings::Import) -> Outcome<Option<DefKind>> {
     with_ast_module(db, import.mdl, |_tu, ast| {
         let ctx = LowerCtx {
             db,
@@ -77,13 +77,13 @@ enum ExportKind<'tu> {
     TemplateType(Entity<'tu>),
 }
 
-struct LowerCtx<'ctx, 'tu, DB: AstMethods> {
+struct LowerCtx<'ctx, 'tu, DB: CcSourceIr> {
     db: &'ctx DB,
     mdl: ModuleId,
     ast: &'ctx ModuleContextInner<'tu>,
 }
 
-impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
+impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
     fn get_exports(&self, tu: &'tu TranslationUnit<'tu>) -> Outcome<Vec<Export<'tu>>> {
         // There are two kinds of exports currently supported: exports by the C++ header itself, in
         // the form of a `rust_export` namespace, and imports from cc_use! in Rust code. Handle
@@ -200,7 +200,7 @@ impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
     }
 }
 
-impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
+impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
     /// Lowers the set of items in the `rust_export` namespace in C++.
     fn lower_cc_exports(&self, exports: &[Export<'tu>]) -> Outcome<Arc<[DefKind]>> {
         let mut items = vec![];
@@ -485,12 +485,12 @@ impl<'ctx, 'tu, DB: AstMethods> LowerCtx<'ctx, 'tu, DB> {
 
 trait Lower<'ctx, 'tu> {
     type Output;
-    fn lower<DB: AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty>;
+    fn lower<DB: CcSourceIr>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty>;
 }
 
 impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
     type Output = Ty;
-    fn lower<DB: AstMethods>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty> {
+    fn lower<DB: CcSourceIr>(&self, ctx: &LowerCtx<'ctx, 'tu, DB>) -> Outcome<Ty> {
         use TypeKind::*;
         ok(match self.get_kind() {
             Void => Ty::Void,

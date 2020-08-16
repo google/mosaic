@@ -1,7 +1,7 @@
 // TODO: Make paths like Foo::Pod work
-extern crate pod_bind;
+extern crate cc_use_bind;
 use cc_use::cc_use;
-cc_use!("pod.h", Pod);
+cc_use!("cc_use.h", Pod);
 
 fn main() {
     let mut pod = Pod {

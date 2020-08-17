@@ -10,7 +10,7 @@ use crate::{
     },
     libclang::CcSourceIr,
 };
-use gen_macro::{snippet, write_gen, Gen, Snippet};
+use gen_macro::{snippet, write_gen, write_gen_if, Gen, Snippet};
 use itertools::Itertools;
 use std::io::{self, Write};
 
@@ -43,16 +43,6 @@ impl<'a, 'b> Outputs<'a, 'b> {
         }
     }
 }
-
-// TODO get this working.
-// macro_rules! write_gen_if {
-//     ($db:expr, $writer:expr, $fmt:literal) => {
-//         $writer
-//             .as_mut()
-//             .map(|w| write_gen!($db, w, $fmt))
-//             .transpose()
-//     };
-// }
 
 #[rustfmt::skip::macros(write_gen)]
 pub(crate) fn perform_codegen(
@@ -90,7 +80,7 @@ pub(crate) fn perform_codegen(
     Ok(())
 }
 
-#[rustfmt::skip::macros(write_gen)]
+#[rustfmt::skip::macros(write_gen, write_gen_if)]
 fn gen_module_contents(
     db: &impl RsTargetBindings,
     mdl: &rs::Module,
@@ -101,23 +91,13 @@ fn gen_module_contents(
             rs::ItemKind::Module(id) => {
                 let inner = id.lookup(db);
                 let (name, vis) = (&inner.name, &inner.vis);
-                out.rs
-                    .as_mut()
-                    .map(|rs| {
-                        write_gen!(db, rs, "
-                            ${vis}mod $name {
-                        ")
-                    })
-                    .transpose()?;
+                write_gen_if!(db, out.rs, "
+                    ${vis}mod $name {
+                ")?;
                 out.with_indent_rs(|out| gen_module_contents(db, &inner, out))?;
-                out.rs
-                    .as_mut()
-                    .map(|rs| {
-                        write_gen!(db, rs, "
-                            }
-                        ")
-                    })
-                    .transpose()?;
+                write_gen_if!(db, out.rs, "
+                    }
+                ")?;
             }
             rs::ItemKind::Reexport(path_id) => {
                 if let Some(rs) = out.rs.as_mut() {

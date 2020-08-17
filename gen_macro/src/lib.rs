@@ -2,6 +2,7 @@ use std::io::{self, Write};
 
 pub use gen_macro_impl::snippet;
 pub use gen_macro_impl::write_gen;
+pub use gen_macro_impl::write_gen_if;
 
 pub trait Gen<Ctx = ()> {
     fn gen(&self, ctx: &Ctx, writer: &mut CodeWriter<'_>) -> io::Result<()>;

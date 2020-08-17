@@ -59,6 +59,26 @@ fn write_gen_impl(input: WriteGenMacroInput) -> Result<TokenStream> {
     })
 }
 
+/// Same as [`write_gen`], except takes a file which is wrapped in an `Option`.
+/// If `None`, nothing is written.
+#[proc_macro]
+pub fn write_gen_if(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let expr = parse_macro_input!(input as WriteGenMacroInput);
+    write_gen_if_impl(expr)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+fn write_gen_if_impl(mut input: WriteGenMacroInput) -> Result<TokenStream> {
+    let writer = Ident::new("writer", Span::call_site());
+    let writer_expr = syn::parse2(quote!(#writer))?;
+    let file = std::mem::replace(&mut input.file, writer_expr);
+    let write_gen_expanded = write_gen_impl(input)?;
+    Ok(quote! {
+        #file.as_mut().map(|#writer| #write_gen_expanded).transpose()
+    })
+}
+
 struct SnippetMacroInput {
     ctx: Expr,
     fmt_str: LitStr,

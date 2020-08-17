@@ -118,10 +118,10 @@ pub trait CcSourceIr: CcSource + DefIr + SourceFileCache {
     fn cc_module_ids(&self) -> Vec<ModuleId>;
 
     #[salsa::invoke(lowering::cc_exported_items)]
-    fn cc_exported_items(&self, mdl: ModuleId) -> Outcome<Arc<[ir::DefKind]>>;
+    fn cc_exported_items(&self, mdl: ModuleId) -> Outcome<Arc<[ir::CcSourceImport]>>;
 
     #[salsa::invoke(lowering::cc_item)]
-    fn cc_item(&self, import: ir::bindings::Import) -> Outcome<Option<ir::DefKind>>;
+    fn cc_item(&self, import: ir::bindings::Import) -> Outcome<Option<ir::CcSourceImport>>;
 
     #[salsa::invoke(lowering::lower_ty)]
     fn type_of(&self, mdl: ModuleId, id: TypeId) -> Outcome<ir::cc::Ty>;

@@ -137,6 +137,9 @@ fn headers(db: &impl RsImportIr) -> Outcome<Arc<[ir::bindings::Header]>> {
 }
 
 fn imports(db: &impl RsImportIr) -> Outcome<Arc<[ir::bindings::Import]>> {
+    if db.rs_source_root().is_none() {
+        return Outcome::from_ok(Arc::new([]));
+    }
     db.headers_with_imports().to_ref().map(|data| {
         data.iter()
             .flat_map(|hdr| hdr.imports.iter().cloned())
@@ -148,6 +151,9 @@ fn imports_for(
     db: &impl RsImportIr,
     mdl: ir::bindings::ModuleId,
 ) -> Outcome<Arc<[ir::bindings::Import]>> {
+    if db.rs_source_root().is_none() {
+        return Outcome::from_ok(Arc::new([]));
+    }
     db.headers_with_imports().to_ref().map(|data| {
         let mut headers = data.iter().filter(|hdr| hdr.module_id == mdl);
         let header = headers.next().unwrap();

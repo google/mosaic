@@ -356,6 +356,9 @@ mod tests {
                 pub c: f64,
                 pub d: f64,
             }
+            pub mod export {
+                pub use crate::Pod;
+            }
         "#);
     }
 
@@ -384,6 +387,9 @@ mod tests {
             struct Foo {
                 pub a: i32,
                 pub b: i32,
+            }
+            pub mod export {
+                pub use crate::Bar;
             }
         "#);
     }
@@ -426,6 +432,10 @@ mod tests {
                 pub fn sum(&mut self, c: i32, _1__: i32) -> i32 {
                     ::core::ptr::NonNull::from(self).sum(c, _1__)
                 }
+            }
+            pub mod export {
+                pub use crate::Foo;
+                pub use crate::ns::Bar;
             }
             pub mod ns {
                 #[repr(C, align(4))]
@@ -487,6 +497,9 @@ mod tests {
                 pub d: i8,
                 foo: Foo,
             }
+            pub mod export {
+                pub use crate::Bar;
+            }
         "#);
     }
 
@@ -503,6 +516,9 @@ mod tests {
                 using ::ns::Foo;
             }
         } => r#"
+            pub mod export {
+                pub use crate::ns::Foo;
+            }
             pub mod ns {
                 #[repr(C, align(4))]
                 pub struct Foo {

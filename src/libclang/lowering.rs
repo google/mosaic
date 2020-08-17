@@ -8,8 +8,11 @@ use super::{
 };
 use crate::{
     diagnostics::{err, ok, Diagnostic, Diagnostics, Outcome, Span},
-    ir::cc::{self, *},
     ir::{bindings, DefKind},
+    ir::{
+        cc::{self, *},
+        CcSourceImport,
+    },
 };
 use clang::{
     self, Accessibility, Entity, EntityKind, EntityVisitResult, TranslationUnit, Type, TypeKind,
@@ -24,7 +27,10 @@ pub(super) fn lower_ty(db: &impl CcSourceIr, mdl: ModuleId, ty: TypeId) -> Outco
     })
 }
 
-pub(super) fn cc_exported_items(db: &impl CcSourceIr, mdl: ModuleId) -> Outcome<Arc<[DefKind]>> {
+pub(super) fn cc_exported_items(
+    db: &impl CcSourceIr,
+    mdl: ModuleId,
+) -> Outcome<Arc<[CcSourceImport]>> {
     with_ast_module(db, mdl, |tu, ast| {
         let ctx = LowerCtx { db, mdl, ast };
         ctx.get_exports(tu)
@@ -32,7 +38,10 @@ pub(super) fn cc_exported_items(db: &impl CcSourceIr, mdl: ModuleId) -> Outcome<
     })
 }
 
-pub(super) fn cc_item(db: &impl CcSourceIr, import: bindings::Import) -> Outcome<Option<DefKind>> {
+pub(super) fn cc_item(
+    db: &impl CcSourceIr,
+    import: bindings::Import,
+) -> Outcome<Option<CcSourceImport>> {
     with_ast_module(db, import.mdl, |_tu, ast| {
         let ctx = LowerCtx {
             db,
@@ -59,13 +68,21 @@ pub(super) fn cc_item(db: &impl CcSourceIr, import: bindings::Import) -> Outcome
                 .next()
                 .map(|item| ctx.lower(item))
                 .unwrap_or(ok(None))
+                .map(|opt| opt.map(|def| CcSourceImport { import, def }))
         })
     })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct Export<'tu> {
-    name: Path,
+    /// Name of the export item itself.
+    ///
+    /// Often the same as the name of the thing being exported.
+    name: Ident,
+    /// Path to the actual thing being exported.
+    ///
+    /// None if ambiguous (there should be an error in this case.)
+    path: Option<Path>,
     kind: ExportKind<'tu>,
     span: Span,
 }
@@ -77,6 +94,43 @@ enum ExportKind<'tu> {
     TemplateType(Entity<'tu>),
 }
 
+impl<'tu> ExportKind<'tu> {
+    fn declaration(&self) -> Option<Entity<'tu>> {
+        match self {
+            ExportKind::Decl(ent) => match ent.get_kind() {
+                EntityKind::OverloadedDeclRef => {
+                    let decls = ent.get_overloaded_declarations()?;
+                    assert!(decls.len() <= 1);
+                    decls.get(0).copied()
+                }
+                _ => Some(*ent),
+            },
+            ExportKind::Type(ty) => ty.0.get_declaration(), // TODO
+            ExportKind::TemplateType(ent) => Some(*ent),
+        }
+    }
+
+    fn path(&self) -> Option<Path> {
+        let target_decl = self.declaration()?;
+        let mut components = vec![target_decl.get_name().unwrap()];
+        let mut parent = target_decl.get_semantic_parent();
+        while let Some(ent) = parent {
+            if ent.get_kind() == EntityKind::TranslationUnit {
+                break;
+            }
+            components.push(ent.get_name().unwrap());
+            parent = ent.get_semantic_parent();
+        }
+        Some(
+            components
+                .into_iter()
+                .rev()
+                .map(Ident::from)
+                .collect::<Path>(),
+        )
+    }
+}
+
 struct LowerCtx<'ctx, 'tu, DB: CcSourceIr> {
     db: &'ctx DB,
     mdl: ModuleId,
@@ -85,9 +139,6 @@ struct LowerCtx<'ctx, 'tu, DB: CcSourceIr> {
 
 impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
     fn get_exports(&self, tu: &'tu TranslationUnit<'tu>) -> Outcome<Vec<Export<'tu>>> {
-        // There are two kinds of exports currently supported: exports by the C++ header itself, in
-        // the form of a `rust_export` namespace, and imports from cc_use! in Rust code. Handle
-        // them both here.
         let mut exports = vec![];
         let mut indices = HashMap::new();
 
@@ -110,12 +161,12 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         &self,
         decl: Entity<'tu>,
         exports: &mut Vec<Export<'tu>>,
-        indices: &mut HashMap<Path, usize>,
+        indices: &mut HashMap<Ident, usize>,
         diags: &mut Diagnostics,
     ) {
-        let name = Path::from(decl.get_name().unwrap());
         match self.make_export(decl) {
             Some(kind) => {
+                let name = decl.get_name().unwrap().into();
                 self.maybe_add_export(name, kind, self.span(decl), exports, indices, diags);
             }
             None => diags.add(Diagnostic::error(
@@ -139,11 +190,11 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
 
     fn maybe_add_export(
         &self,
-        name: Path,
+        name: Ident,
         kind: ExportKind<'tu>,
         span: Span,
         exports: &mut Vec<Export<'tu>>,
-        indices: &mut HashMap<Path, usize>,
+        indices: &mut HashMap<Ident, usize>,
         diags: &mut Diagnostics,
     ) {
         if let Some(idx) = indices.get(&name) {
@@ -159,7 +210,12 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
             }
             return;
         }
-        exports.push(Export { name, kind, span });
+        exports.push(Export {
+            name,
+            path: kind.path(),
+            kind,
+            span,
+        });
     }
 
     fn handle_rust_import(
@@ -168,7 +224,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         span: &Span,
         index: &mut index::PathIndex<'tu>,
         exports: &mut Vec<Export<'tu>>,
-        indices: &mut HashMap<Path, usize>,
+        indices: &mut HashMap<Ident, usize>,
         diags: &mut Diagnostics,
     ) {
         let ent = match index.lookup(path) {
@@ -190,7 +246,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         // Assume this would be an ordinary using decl. TODO: Don't.
         let span = self.span(ent); // TODO this should be a span to the rust cc_use
         self.maybe_add_export(
-            path.clone(),
+            path.iter().last().unwrap().clone(),
             ExportKind::Decl(ent),
             span,
             exports,
@@ -202,7 +258,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
 
 impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
     /// Lowers the set of items in the `rust_export` namespace in C++.
-    fn lower_cc_exports(&self, exports: &[Export<'tu>]) -> Outcome<Arc<[DefKind]>> {
+    fn lower_cc_exports(&self, exports: &[Export<'tu>]) -> Outcome<Arc<[CcSourceImport]>> {
         let mut items = vec![];
         let mut export_set = HashSet::new();
         let mut diags = Diagnostics::new();
@@ -210,7 +266,18 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
             let (def, errs) = self
                 .lower_export(&export.name, &export.kind, Some(&mut export_set))
                 .split();
-            items.extend(def.into_iter());
+            items.extend(
+                def.map(|def| CcSourceImport {
+                    import: bindings::Import {
+                        mdl: self.mdl,
+                        // If we got Some, the export was valid and the path must exist.
+                        path: export.path.clone().unwrap(),
+                        span: export.span.clone(),
+                    },
+                    def,
+                })
+                .into_iter(),
+            );
             diags.append(errs);
         }
         Outcome::from_parts(items.into(), diags)
@@ -222,12 +289,12 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
 
     fn lower_export(
         &self,
-        name: &Path,
+        fallback_name: &Ident,
         export: &ExportKind<'tu>,
         export_set: Option<&mut HashSet<DefKind>>,
     ) -> Outcome<Option<DefKind>> {
         match export {
-            ExportKind::Decl(decl_ref) => self.lower_decl(name, *decl_ref).then(|item| {
+            ExportKind::Decl(decl_ref) => self.lower_decl(fallback_name, *decl_ref).then(|item| {
                 if let Some(kind) = item {
                     let def = DefKind::CcDef(kind);
                     if let Some(set) = export_set {
@@ -249,7 +316,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
                 ok(None)
             }),
             ExportKind::Type(ty) => {
-                println!("{} = {:?}", name, ty);
+                println!("{} = {:?}", fallback_name, ty);
                 println!(
                     "  {:?}",
                     ty.0.get_elaborated_type()
@@ -259,7 +326,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
                 ok(None)
             }
             ExportKind::TemplateType(t) => {
-                println!("{} = {:?}", name, t);
+                println!("{} = {:?}", fallback_name, t);
                 for child in t.get_children() {
                     match child.get_kind() {
                         EntityKind::TemplateTypeParameter => {
@@ -281,7 +348,11 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower_decl(&self, name: &Path, decl_ref: Entity<'tu>) -> Outcome<Option<cc::ItemKind>> {
+    fn lower_decl(
+        &self,
+        fallback_name: &Ident,
+        decl_ref: Entity<'tu>,
+    ) -> Outcome<Option<cc::ItemKind>> {
         let ent = decl_ref
             .get_overloaded_declarations()
             .map(|overloads| {
@@ -297,7 +368,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
 
         match ent.get_kind() {
             EntityKind::StructDecl => self
-                .lower_struct(name, ent)
+                .lower_struct(fallback_name, ent)
                 .map(|st| st.map(cc::ItemKind::Struct)),
             //other => eprintln!("{}: Unsupported type {:?}", name, other),
             other => err(
@@ -332,7 +403,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
 
     fn lower_struct(
         &self,
-        fallback_name: &Path,
+        fallback_name: &Ident,
         ent: Entity<'tu>,
     ) -> Outcome<Option<cc::StructId>> {
         assert_eq!(ent.get_kind(), EntityKind::StructDecl);
@@ -340,7 +411,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         let name = ent
             .get_name()
             .map(Ident::from)
-            .unwrap_or_else(|| fallback_name.iter().last().unwrap().clone());
+            .unwrap_or_else(|| fallback_name.clone());
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
             return err(
@@ -536,7 +607,7 @@ impl<'ctx, 'tu> Lower<'ctx, 'tu> for Type<'tu> {
             Record => {
                 let decl = self.get_declaration().unwrap();
                 return ctx
-                    .lower_struct(&Path::from(self.get_display_name()), decl)
+                    .lower_struct(&Ident::from(self.get_display_name()), decl)
                     .map(|st| st.map_or(Ty::Error, |st| Ty::Struct(st)));
             }
             _ => panic!("unsupported type {:?}", self),

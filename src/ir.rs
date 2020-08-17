@@ -52,23 +52,29 @@ impl Def {
     }
 }
 
-/// The set of defs that are being imported from one translation unit.
-#[derive(Default, Debug, Eq, PartialEq)]
-pub struct Module {
-    pub items: Vec<DefKind>,
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CcSourceImport {
+    pub import: bindings::Import,
+    pub def: DefKind,
 }
-impl Module {
+
+/// The set of defs that are being imported from one C++ translation unit.
+#[derive(Debug, Eq, PartialEq)]
+pub struct CcSourceBindingsLib {
+    pub items: Vec<CcSourceImport>,
+}
+impl CcSourceBindingsLib {
     pub fn reachable_items<'db>(
         &self,
         db: &'db (impl DefIr + CcSourceIr),
     ) -> impl Iterator<Item = DefKind> + 'db {
-        let queue = self.items.iter().cloned().collect();
+        let queue = self.items.iter().map(|imp| imp.def.clone()).collect();
         ReachableIter { db, queue }
     }
 
     pub fn to_rs_bindings(
         db: &(impl DefIr + cc::RsTargetIr + cc::CcModule),
-        modules: &[Arc<Module>],
+        libs: &[Arc<CcSourceBindingsLib>],
     ) -> Outcome<rs::BindingsCrate> {
         #[derive(Default)]
         struct NsInfo {
@@ -92,8 +98,8 @@ impl Module {
 
         // Lower each item and register its parent namespace.
         let mut errs = Diagnostics::new();
-        for mdl in modules {
-            for def in mdl.reachable_items(db) {
+        for lib in libs {
+            for def in lib.reachable_items(db) {
                 match def {
                     DefKind::CcDef(cc::ItemKind::Struct(st)) => {
                         let (rs_id, err) = db.rs_struct_from_cc(st).split();
@@ -118,29 +124,24 @@ impl Module {
         };
 
         // Compute the reexport path from the export module to each import and create the module.
-        // TODO make this work with rust_exports.
-        if db.rs_source_root().is_some() {
-            let reexports = db
-                .imports()
-                .to_ref()
-                .skip_errs()
-                .iter()
-                .map(|import| -> rs::Path {
-                    Some(rs::Ident::from("crate")) // TODO represent this properly
-                        .iter()
-                        .chain(import.path.iter())
-                        .cloned()
-                        .collect()
-                })
-                .map(|path| rs::ItemKind::Reexport(db.intern_path(path)))
-                .collect();
-            let export_mod = rs::ItemKind::Module(db.intern_module(rs::Module {
-                name: rs::Ident::from("export"),
-                vis: rs::Visibility::Public,
-                children: reexports,
-            }));
-            namespaces.get_mut(&root_ns).unwrap().items.push(export_mod);
-        }
+        let reexports = libs
+            .iter()
+            .flat_map(|lib| lib.items.iter())
+            .map(|import| -> rs::Path {
+                Some(rs::Ident::from("crate")) // TODO represent this properly
+                    .iter()
+                    .chain(import.import.path.iter())
+                    .cloned()
+                    .collect()
+            })
+            .map(|path| rs::ItemKind::Reexport(db.intern_path(path)))
+            .collect();
+        let export_mod = rs::ItemKind::Module(db.intern_module(rs::Module {
+            name: rs::Ident::from("export"),
+            vis: rs::Visibility::Public,
+            children: reexports,
+        }));
+        namespaces.get_mut(&root_ns).unwrap().items.push(export_mod);
 
         // Recursively lower each namespace with its list of children.
         fn lower_ns(
@@ -449,14 +450,21 @@ pub mod cc {
 
         #[salsa::query_group(CcModuleStorage)]
         pub trait CcModule: CcSourceIr + RsImportIr {
-            fn cc_module(&self, mdl: super::super::bindings::ModuleId) -> Outcome<Arc<Module>>;
+            fn cc_module(
+                &self,
+                mdl: super::super::bindings::ModuleId,
+            ) -> Outcome<Arc<CcSourceBindingsLib>>;
         }
 
         fn cc_module(
             db: &impl CcModule,
             mdl: super::super::bindings::ModuleId,
-        ) -> Outcome<Arc<Module>> {
+        ) -> Outcome<Arc<CcSourceBindingsLib>> {
             let mut diags = Diagnostics::new();
+
+            // There are two kinds of exports currently supported: exports by the C++ header
+            // itself, in the form of a `rust_export` namespace, and imports from cc_use! in Rust
+            // code. Handle them both here.
 
             // Collect entities exported from C++..
             let (exported, errs) = db.cc_exported_items(mdl).split();
@@ -464,17 +472,15 @@ pub mod cc {
             let mut defs = Vec::from(&*exported);
 
             // ..and combine with those imported from Rust.
-            if db.rs_source_root().is_some() {
-                let (imports, errs) = db.imports_for(mdl).split();
+            let (imports, errs) = db.imports_for(mdl).split();
+            diags.append(errs);
+            for import in imports.iter() {
+                let (def, errs) = db.cc_item(import.clone()).split();
                 diags.append(errs);
-                for import in imports.iter() {
-                    let (def, errs) = db.cc_item(import.clone()).split();
-                    diags.append(errs);
-                    defs.extend(def.iter().cloned());
-                }
+                defs.extend(def.iter().cloned());
             }
 
-            Outcome::from_parts(Arc::new(Module { items: defs }), diags)
+            Outcome::from_parts(Arc::new(CcSourceBindingsLib { items: defs }), diags)
         }
     }
     pub use bindings::*;
@@ -643,7 +649,8 @@ pub mod cc {
                         .to_ref()
                         .skip_errs()
                         .items
-                        .contains(&id.clone().into())
+                        .iter()
+                        .any(|import| import.def == id.clone().into())
                 }),
                 _ if self.is_builtin() => true,
                 Ty::Error => false,
@@ -762,8 +769,13 @@ pub mod cc {
                 .cc_module_ids()
                 .into_iter()
                 .map(|mdl_id| db.cc_module(mdl_id))
-                .any(|mdl| mdl.to_ref().skip_errs().items.contains(&id.into()))
-            {
+                .any(|mdl| {
+                    mdl.to_ref()
+                        .skip_errs()
+                        .items
+                        .iter()
+                        .any(|imp| imp.def == id.clone().into())
+                }) {
                 true => rs::Visibility::Public,
                 false => rs::Visibility::Private,
             };
@@ -877,7 +889,8 @@ pub mod rs {
                 modules.push(mdl);
                 diags.append(errs);
             }
-            let (rs_bindings, errs) = crate::ir::Module::to_rs_bindings(db, &modules).split();
+            let (rs_bindings, errs) =
+                crate::ir::CcSourceBindingsLib::to_rs_bindings(db, &modules).split();
             diags.append(errs);
             Arc::new(Outcome::from_parts(rs_bindings, diags))
         }

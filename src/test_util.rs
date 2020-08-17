@@ -99,9 +99,11 @@ pub(crate) fn check_codegen(
     let rs_module = parse_and_lower(sess, src, vec![]);
     let mut rs_out = vec![];
     let mut cc_out = vec![];
+    let mut rs_writer = codegen::CodeWriter::new(&mut rs_out);
+    let mut cc_writer = codegen::CodeWriter::new(&mut cc_out);
     let outputs = codegen::Outputs {
-        rs: Some(codegen::CodeWriter::new(&mut rs_out)),
-        cc: Some(codegen::CodeWriter::new(&mut cc_out)),
+        rs: Some(&mut rs_writer),
+        cc: Some(&mut cc_writer),
         hdr: None,
     };
     let header = ir::bindings::Header {

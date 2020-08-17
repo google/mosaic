@@ -195,9 +195,11 @@ fn run_generator(
 ) -> bool {
     let mut rs_writer = io::BufWriter::new(out_rs);
     let mut cc_writer = io::BufWriter::new(out_cc);
+    let mut rs_writer = codegen::CodeWriter::new(&mut rs_writer);
+    let mut cc_writer = codegen::CodeWriter::new(&mut cc_writer);
     let outputs = codegen::Outputs {
-        rs: Some(codegen::CodeWriter::new(&mut rs_writer)),
-        cc: Some(codegen::CodeWriter::new(&mut cc_writer)),
+        rs: Some(&mut rs_writer),
+        cc: Some(&mut cc_writer),
         hdr: None,
     };
 

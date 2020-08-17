@@ -16,11 +16,43 @@ use std::io::{self, Write};
 
 pub(crate) use gen_macro::CodeWriter;
 
-pub(crate) struct Outputs<'a> {
-    pub rs: Option<CodeWriter<'a>>,
-    pub cc: Option<CodeWriter<'a>>,
-    pub hdr: Option<CodeWriter<'a>>,
+pub(crate) struct Outputs<'a, 'b> {
+    pub rs: Option<&'a mut CodeWriter<'b>>,
+    pub cc: Option<&'a mut CodeWriter<'b>>,
+    pub hdr: Option<&'a mut CodeWriter<'b>>,
 }
+impl<'a, 'b> Outputs<'a, 'b> {
+    fn with_indent_rs(
+        &mut self,
+        f: impl FnOnce(&mut Outputs<'_, '_>) -> io::Result<()>,
+    ) -> io::Result<()> {
+        if let Some(rs) = self.rs.as_mut() {
+            // Temporarily narrow the lifetimes of our mutable borrows.
+            let cc = self.cc.as_mut().map(|cc| cc as _);
+            let hdr = self.hdr.as_mut().map(|hdr| hdr as _);
+            rs.with_indent(|rs| {
+                let mut outputs = Outputs {
+                    rs: Some(rs),
+                    cc,
+                    hdr,
+                };
+                f(&mut outputs)
+            })
+        } else {
+            f(self)
+        }
+    }
+}
+
+// TODO get this working.
+// macro_rules! write_gen_if {
+//     ($db:expr, $writer:expr, $fmt:literal) => {
+//         $writer
+//             .as_mut()
+//             .map(|w| write_gen!($db, w, $fmt))
+//             .transpose()
+//     };
+// }
 
 #[rustfmt::skip::macros(write_gen)]
 pub(crate) fn perform_codegen(
@@ -28,7 +60,7 @@ pub(crate) fn perform_codegen(
     mdl: &rs::BindingsCrate,
     headers: &[bindings::Header],
     skip_header: bool,
-    mut out: Outputs<'_>,
+    mut out: Outputs<'_, '_>,
 ) -> io::Result<()> {
     let out = &mut out;
 
@@ -54,8 +86,47 @@ pub(crate) fn perform_codegen(
         }
     }
 
-    for item in &mdl.items {
+    gen_module_contents(db, &mdl.root.lookup(db), out)?;
+    Ok(())
+}
+
+#[rustfmt::skip::macros(write_gen)]
+fn gen_module_contents(
+    db: &impl RsTargetBindings,
+    mdl: &rs::Module,
+    out: &mut Outputs<'_, '_>,
+) -> io::Result<()> {
+    for item in &mdl.children {
         match item {
+            rs::ItemKind::Module(id) => {
+                let inner = id.lookup(db);
+                let (name, vis) = (&inner.name, &inner.vis);
+                out.rs
+                    .as_mut()
+                    .map(|rs| {
+                        write_gen!(db, rs, "
+                            ${vis}mod $name {
+                        ")
+                    })
+                    .transpose()?;
+                out.with_indent_rs(|out| gen_module_contents(db, &inner, out))?;
+                out.rs
+                    .as_mut()
+                    .map(|rs| {
+                        write_gen!(db, rs, "
+                            }
+                        ")
+                    })
+                    .transpose()?;
+            }
+            rs::ItemKind::Reexport(path_id) => {
+                if let Some(rs) = out.rs.as_mut() {
+                    let path = path_id.lookup(db);
+                    write_gen!(db, rs, "
+                        pub use $path;
+                    ")?;
+                }
+            }
             rs::ItemKind::Struct(st) => gen_struct(db, &st.lookup(db), out)?,
         }
     }
@@ -75,7 +146,7 @@ impl<DB: RsTargetIr> Gen<DB> for rs::Visibility {
 fn gen_struct(
     db: &impl RsTargetBindings,
     st: &rs::Struct,
-    out: &mut Outputs<'_>,
+    out: &mut Outputs<'_, '_>,
 ) -> io::Result<()> {
     if let Some(rs) = out.rs.as_mut() {
         let rs::Struct {
@@ -112,7 +183,7 @@ fn gen_method(
     db: &impl RsTargetBindings,
     st: &rs::Struct,
     meth: &rs::Method,
-    out: &mut Outputs<'_>,
+    out: &mut Outputs<'_, '_>,
 ) -> io::Result<()> {
     // TODO handle visibility (don't generate bindings for private methods)
     // TODO handle constness
@@ -176,12 +247,12 @@ fn gen_method(
             .into();
         let arg_names: Snippet = arg_names.iter().join(", ").into();
         let cc_st = st.cc_id.lookup(db);
-        let st_name = cc_st.name;
+        let st_path = cc_st.path(db);
         let func_name = &func.name;
         let ret_ty = func.return_ty(db);
         write_gen!(db, cc, r#"
-            extern "C" $ret_ty $c_func_name($st_name* self, $args_sig) {
-                return self->$st_name::$func_name($arg_names);
+            extern "C" $ret_ty $c_func_name($st_path* self, $args_sig) {
+                return self->$st_path::$func_name($arg_names);
             }
         "#)?;
     }
@@ -345,8 +416,16 @@ mod tests {
                 int a, b;
                 int sum(int c, int) const;
             };
+            namespace ns {
+                struct Bar {
+                    int x;
+                    char frob();
+                };
+            }
+            // TODO this should turn into an export module in Rust.
             namespace rust_export {
                 using ::Foo;
+                using ns::Bar;
             }
         } => r#"
             #[repr(C, align(4))]
@@ -368,9 +447,32 @@ mod tests {
                     ::core::ptr::NonNull::from(self).sum(c, _1__)
                 }
             }
+            pub mod ns {
+                #[repr(C, align(4))]
+                pub struct Bar {
+                    pub x: i32,
+                }
+                pub trait Bar_frob_Ext {
+                    fn frob(self, ) -> i8;
+                }
+                impl Bar_frob_Ext for ::core::ptr::NonNull<Bar> {
+                    fn frob(self, ) -> i8 {
+                        extern "C" { fn _bind_Bar__frob(this: *mut Bar, ) -> i8; }
+                        unsafe { _bind_Bar__frob(self.as_ptr(), ) }
+                    }
+                }
+                impl Bar {
+                    pub fn frob(&mut self, ) -> i8 {
+                        ::core::ptr::NonNull::from(self).frob()
+                    }
+                }
+            }
         "#, r#"
-            extern "C" int _bind_Foo__sum(Foo* self, int c, int _1__) {
-                return self->Foo::sum(c, _1__);
+            extern "C" int _bind_Foo__sum(::Foo* self, int c, int _1__) {
+                return self->::Foo::sum(c, _1__);
+            }
+            extern "C" char _bind_Bar__frob(::ns::Bar* self, ) {
+                return self->::ns::Bar::frob();
             }
         "#);
     }
@@ -421,10 +523,12 @@ mod tests {
                 using ::ns::Foo;
             }
         } => r#"
-            #[repr(C, align(4))]
-            pub struct Foo {
-                pub a: i32,
-                pub b: i32,
+            pub mod ns {
+                #[repr(C, align(4))]
+                pub struct Foo {
+                    pub a: i32,
+                    pub b: i32,
+                }
             }
         "#);
     }

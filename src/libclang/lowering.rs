@@ -310,9 +310,37 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         }
     }
 
-    fn lower_struct(&self, name: &Path, ent: Entity<'tu>) -> Outcome<Option<cc::StructId>> {
+    fn lower_parent(&self, ent: Entity<'tu>) -> Outcome<cc::NamespaceId> {
+        let parent = ent
+            .get_semantic_parent()
+            .expect("`lower_parent` called on the root namespace");
+        if parent.get_semantic_parent().is_none() {
+            ok(self.db.intern_cc_namespace(cc::Namespace {
+                name: Ident::from(""),
+                parent: None,
+            }))
+        } else {
+            let name = parent.get_name().expect("Entity with anonymous parent");
+            self.lower_parent(parent).map(|parent| {
+                self.db.intern_cc_namespace(cc::Namespace {
+                    name: Ident::from(name),
+                    parent: Some(parent),
+                })
+            })
+        }
+    }
+
+    fn lower_struct(
+        &self,
+        fallback_name: &Path,
+        ent: Entity<'tu>,
+    ) -> Outcome<Option<cc::StructId>> {
         assert_eq!(ent.get_kind(), EntityKind::StructDecl);
 
+        let name = ent
+            .get_name()
+            .map(Ident::from)
+            .unwrap_or_else(|| fallback_name.iter().last().unwrap().clone());
         let ty = ent.get_type().unwrap();
         if !ty.is_pod() {
             return err(
@@ -379,9 +407,12 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
             EntityVisitResult::Continue
         });
 
+        let (parent, err) = self.lower_parent(ent).split();
+        errs.append(err);
         let st = if errs.is_empty() {
             let st = self.db.intern_cc_struct(cc::Struct {
                 name: name.clone(),
+                parent,
                 fields,
                 offsets,
                 methods,

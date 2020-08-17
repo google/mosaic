@@ -127,6 +127,9 @@ pub trait CcSourceIr: CcSource + DefIr + SourceFileCache {
     fn type_of(&self, mdl: ModuleId, id: TypeId) -> Outcome<ir::cc::Ty>;
 
     #[salsa::interned]
+    fn intern_cc_namespace(&self, st: ir::cc::Namespace) -> ir::cc::NamespaceId;
+
+    #[salsa::interned]
     fn intern_cc_struct(&self, st: ir::cc::Struct) -> ir::cc::StructId;
 
     #[salsa::interned]

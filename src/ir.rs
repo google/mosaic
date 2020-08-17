@@ -8,12 +8,12 @@
 //! converting between IRs contains explicit checks that the semantics in one
 //! language IR can be represented in the other.
 
-use crate::diagnostics::{err, ok, Diagnostic, Outcome, Span};
+use crate::diagnostics::{err, ok, Diagnostic, Diagnostics, Outcome, Span};
 use crate::libclang::CcSourceIr;
 use itertools::Itertools;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU16;
-use std::{fmt, iter};
+use std::{fmt, iter, sync::Arc};
 
 #[salsa::query_group(DefIrStorage)]
 pub trait DefIr {
@@ -67,24 +67,114 @@ impl Module {
     }
 
     pub fn to_rs_bindings(
-        &self,
-        db: &(impl DefIr + cc::RsTargetIr + CcSourceIr),
+        db: &(impl DefIr + cc::RsTargetIr + cc::CcModule),
+        modules: &[Arc<Module>],
     ) -> Outcome<rs::BindingsCrate> {
-        self.reachable_items(db)
-            .map(|def| {
-                let item = match def {
-                    DefKind::CcDef(cc::ItemKind::Struct(st)) => db.rs_struct_from_cc(st),
+        #[derive(Default)]
+        struct NsInfo {
+            namespaces: Vec<cc::NamespaceId>,
+            items: Vec<rs::ItemKind>,
+        }
+        let mut namespaces = HashMap::<cc::NamespaceId, NsInfo>::new();
+        let mut root_ns = None;
+        let mut add_to_ns = |mut ns: cc::NamespaceId, id: rs::ItemKind| {
+            namespaces.entry(ns).or_default().items.push(id);
+            while let Some(parent) = ns.lookup(db).parent {
+                namespaces.entry(parent).or_default().namespaces.push(ns);
+                ns = parent;
+            }
+            if let Some(root) = root_ns {
+                assert!(ns == root);
+            } else {
+                root_ns = Some(ns);
+            }
+        };
+
+        // Lower each item and register its parent namespace.
+        let mut errs = Diagnostics::new();
+        for mdl in modules {
+            for def in mdl.reachable_items(db) {
+                match def {
+                    DefKind::CcDef(cc::ItemKind::Struct(st)) => {
+                        let (rs_id, err) = db.rs_struct_from_cc(st).split();
+                        add_to_ns(st.lookup(db).parent, rs::ItemKind::Struct(rs_id));
+                        errs.append(err);
+                    }
                 };
-                item.map(|i| (def, i))
-            })
-            .collect::<Outcome<Vec<_>>>()
-            .then(|structs| {
-                let items = structs
-                    .iter()
-                    .map(|(_, st)| rs::ItemKind::Struct(*st))
-                    .collect();
-                ok(rs::BindingsCrate { items })
-            })
+            }
+        }
+
+        // If there was nothing to lower, just exit now.
+        let root_ns = match root_ns {
+            Some(ns) => ns,
+            None => {
+                let empty = db.intern_module(rs::Module {
+                    name: common::Ident::from(""),
+                    vis: rs::Visibility::Public,
+                    children: Default::default(),
+                });
+                return Outcome::from_parts(rs::BindingsCrate { root: empty }, errs);
+            }
+        };
+
+        // Compute the reexport path from the export module to each import and create the module.
+        // TODO make this work with rust_exports.
+        if db.rs_source_root().is_some() {
+            let reexports = db
+                .imports()
+                .to_ref()
+                .skip_errs()
+                .iter()
+                .map(|import| -> rs::Path {
+                    Some(rs::Ident::from("crate")) // TODO represent this properly
+                        .iter()
+                        .chain(import.path.iter())
+                        .cloned()
+                        .collect()
+                })
+                .map(|path| rs::ItemKind::Reexport(db.intern_path(path)))
+                .collect();
+            let export_mod = rs::ItemKind::Module(db.intern_module(rs::Module {
+                name: rs::Ident::from("export"),
+                vis: rs::Visibility::Public,
+                children: reexports,
+            }));
+            namespaces.get_mut(&root_ns).unwrap().items.push(export_mod);
+        }
+
+        // Recursively lower each namespace with its list of children.
+        fn lower_ns(
+            db: &impl cc::RsTargetIr,
+            ns: cc::NamespaceId,
+            namespaces: &HashMap<cc::NamespaceId, NsInfo>,
+            lowered: &mut HashMap<cc::NamespaceId, rs::ModuleId>,
+        ) -> rs::ModuleId {
+            if let Some(id) = lowered.get(&ns) {
+                *id
+            } else {
+                let info = &namespaces[&ns];
+                let id =
+                    db.intern_module(rs::Module {
+                        name: ns.lookup(db).name,
+                        // TODO make these all pub(crate) and use the `exports` module
+                        vis: rs::Visibility::Public,
+                        children: info
+                            .items
+                            .iter()
+                            .copied()
+                            .chain(info.namespaces.iter().map(|id| {
+                                rs::ItemKind::Module(lower_ns(db, *id, namespaces, lowered))
+                            }))
+                            .collect(),
+                    });
+                lowered.insert(ns, id);
+                id
+            }
+        }
+        let mut lowered = HashMap::new();
+        let root = lower_ns(db, root_ns, &namespaces, &mut lowered);
+
+        Outcome::from_parts(rs::BindingsCrate { root }, errs)
     }
 }
 
@@ -145,6 +235,7 @@ trait Visitor<DB: DefIr + CcSourceIr> {
         #[allow(unused)]
         let cc::Struct {
             name,
+            parent,
             fields,
             offsets,
             methods,
@@ -252,6 +343,10 @@ mod common {
         pub fn iter(&self) -> impl Iterator<Item = &Ident> {
             self.components.iter()
         }
+        pub fn join(mut self, next: Ident) -> Path {
+            self.components.push(next);
+            self
+        }
     }
     impl fmt::Display for Path {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -345,7 +440,6 @@ pub mod bindings {
 pub mod cc {
     use super::*;
     use crate::libclang::CcSourceIr;
-    use std::sync::Arc;
 
     pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
 
@@ -393,6 +487,11 @@ pub mod cc {
         fn rs_type_of(&self, ty: TypeRef) -> Outcome<rs::Ty>;
 
         #[salsa::interned]
+        fn intern_path(&self, path: rs::Path) -> rs::PathId;
+
+        #[salsa::interned]
+        fn intern_module(&self, st: rs::Module) -> rs::ModuleId;
+        #[salsa::interned]
         fn intern_struct(&self, st: rs::Struct) -> rs::StructId;
     }
 
@@ -431,6 +530,28 @@ pub mod cc {
     impl From<StructId> for ItemKind {
         fn from(st: StructId) -> Self {
             ItemKind::Struct(st)
+        }
+    }
+
+    intern_key!(NamespaceId);
+    impl NamespaceId {
+        #[allow(unused)]
+        pub fn lookup(&self, db: &impl CcSourceIr) -> Namespace {
+            db.lookup_intern_cc_namespace(*self)
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+    pub struct Namespace {
+        pub name: Ident,
+        pub parent: Option<NamespaceId>,
+    }
+    impl Namespace {
+        pub fn path(&self, db: &impl CcSourceIr) -> Path {
+            match self.parent {
+                Some(parent) => parent.lookup(db).path(db).join(self.name.clone()),
+                None => std::iter::once(self.name.clone()).collect(),
+            }
         }
     }
 
@@ -559,13 +680,19 @@ pub mod cc {
 
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Struct {
-        pub name: Path,
+        pub name: Ident,
+        pub parent: NamespaceId,
         pub fields: Vec<Field>,
         pub offsets: Vec<Offset>,
         pub methods: Vec<Function>,
         pub size: Size,
         pub align: Align,
         pub span: Span,
+    }
+    impl Struct {
+        pub fn path(&self, db: &impl CcSourceIr) -> Path {
+            self.parent.lookup(db).path(db).join(self.name.clone())
+        }
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -744,58 +871,77 @@ pub mod rs {
             // For now we combine bindings from all cc modules into a single rs module.
             // They should be separated at some point.
             let mut diags = Diagnostics::new();
-            let mut module = BindingsCrate::default();
-            for mdl in db.cc_module_ids() {
-                let (mdl, errs) = db
-                    .cc_module(mdl)
-                    .then(|cc_mod| cc_mod.to_rs_bindings(db))
-                    .split();
+            let mut modules = Vec::new();
+            for id in db.cc_module_ids() {
+                let (mdl, errs) = db.cc_module(id).split();
+                modules.push(mdl);
                 diags.append(errs);
-                module.append(mdl);
             }
-            Arc::new(Outcome::from_parts(module, diags))
+            let (rs_bindings, errs) = crate::ir::Module::to_rs_bindings(db, &modules).split();
+            diags.append(errs);
+            Arc::new(Outcome::from_parts(rs_bindings, diags))
         }
 
         /// Represents everything that goes in a bindings crate.
         ///
         /// All information that's needed to generate bindings code in both Rust and
         /// C++ for the crate are accessible from this object.
-        #[derive(Debug, Clone, Eq, PartialEq, Default)]
+        #[derive(Debug, Clone, Eq, PartialEq)]
         pub struct BindingsCrate {
-            pub items: Vec<ItemKind>,
+            pub root: ModuleId,
         }
 
         impl BindingsCrate {
-            /// Iterates over all structs that are accessible from outside the
-            /// crate.
-            #[allow(unused)]
-            pub fn visible_structs<'a>(
-                &'a self,
-                db: &'a impl RsTargetIr,
-            ) -> impl Iterator<Item = StructId> + 'a {
-                self.items.iter().filter_map(move |item| match item {
-                    ItemKind::Struct(id) if id.lookup(db).vis.is_public() => Some(*id),
-                    _ => None,
-                })
-            }
-
-            pub fn append(&mut self, mut other: BindingsCrate) {
-                self.items.append(&mut other.items);
+            /// Returns all structs that are accessible from outside the crate.
+            #[cfg(test)]
+            pub fn visible_structs<'a>(&'a self, db: &'a impl RsTargetIr) -> Vec<StructId> {
+                self.root.visible_structs(db)
             }
         }
     }
     pub use bindings::*;
+
+    intern_key!(ModuleId);
+    impl ModuleId {
+        pub fn lookup(&self, db: &impl cc::RsTargetIr) -> Module {
+            db.lookup_intern_module(*self)
+        }
+
+        /// Returns all structs that are accessible from outside the crate.
+        #[cfg(test)]
+        pub fn visible_structs<'a>(&'a self, db: &'a impl RsTargetIr) -> Vec<StructId> {
+            let this = self.lookup(db);
+            if !this.vis.is_public() {
+                return vec![];
+            }
+            let mut structs = vec![];
+            for child in self.lookup(db).children {
+                match child {
+                    ItemKind::Module(id) => structs.append(&mut id.visible_structs(db)),
+                    ItemKind::Reexport(_id) => (), // TODO
+                    ItemKind::Struct(id) => {
+                        if id.lookup(db).vis.is_public() {
+                            structs.push(id)
+                        }
+                    }
+                }
+            }
+            structs
+        }
+    }
+
+    intern_key!(PathId);
+    impl PathId {
+        pub fn lookup(&self, db: &impl cc::RsTargetIr) -> Path {
+            db.lookup_intern_path(*self)
+        }
+    }
 
     intern_key!(StructId);
     impl StructId {
         pub fn lookup(&self, db: &impl cc::RsTargetIr) -> Struct {
             db.lookup_intern_struct(*self)
         }
-    }
-
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-    pub enum ItemKind {
-        Struct(StructId),
     }
 
     /// Represents properties of a Rust type in a #[repr(C)] struct.
@@ -851,12 +997,27 @@ pub mod rs {
         }
     }
 
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+    pub enum ItemKind {
+        Module(ModuleId),
+        Struct(StructId),
+        Reexport(PathId),
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
+    pub struct Module {
+        pub name: Ident,
+        pub vis: Visibility,
+        pub children: Vec<ItemKind>,
+    }
+
     #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
     pub enum Visibility {
         Public,
         Private,
     }
     impl Visibility {
+        #[allow(unused)]
         fn is_public(&self) -> bool {
             *self == Visibility::Public
         }
@@ -886,7 +1047,7 @@ pub mod rs {
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Struct {
-        pub name: Path,
+        pub name: Ident,
         pub fields: Vec<Field>,
         pub offsets: Vec<Offset>,
         pub methods: Vec<Method>,
@@ -921,7 +1082,6 @@ pub mod rs {
     }
 
     pub use cc::{Function, FunctionId};
-    use std::sync::Arc;
 }
 
 #[cfg(test)]
@@ -953,7 +1113,7 @@ mod tests {
             }
         });
         let db = &sess.db;
-        let st = ir.visible_structs(db).next().unwrap().lookup(db);
+        let st = ir.visible_structs(db)[0].lookup(db);
         assert_eq!(
             st.fields
                 .iter()
@@ -978,7 +1138,7 @@ mod tests {
             }
         });
         let db = &sess.db;
-        let st = ir.visible_structs(db).next().unwrap().lookup(db);
+        let st = ir.visible_structs(db)[0].lookup(db);
         assert_eq!(rs::Size::new(4), st.size);
         assert_eq!(rs::Align::new(4), st.align);
     }
@@ -999,7 +1159,7 @@ mod tests {
             }
         });
         let db = &sess.db;
-        let st = ir.visible_structs(db).next().unwrap().lookup(db);
+        let st = ir.visible_structs(db)[0].lookup(db);
         assert_eq!(rs::Size::new(12), st.size);
         assert_eq!(rs::Align::new(4), st.align);
     }
@@ -1020,7 +1180,7 @@ mod tests {
             }
         });
         let db = &sess.db;
-        let st = ir.visible_structs(db).next().unwrap().lookup(db);
+        let st = ir.visible_structs(db)[0].lookup(db);
         assert_eq!(rs::Size::new(16), st.size);
         assert_eq!(rs::Align::new(8), st.align);
     }

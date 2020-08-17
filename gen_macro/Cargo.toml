@@ -8,4 +8,3 @@ edition = "2018"
 
 [dependencies]
 gen_macro_impl = { path = "./impl" }
-proc-macro-hack = "0.5"

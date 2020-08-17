@@ -1,7 +1,6 @@
 extern crate proc_macro;
 
 use proc_macro2::{Ident, Literal, Span, TokenStream, TokenTree};
-use proc_macro_hack::proc_macro_hack;
 use quote::{quote, quote_spanned, ToTokens, TokenStreamExt};
 use std::iter::Peekable;
 use std::ops::Range;
@@ -42,7 +41,7 @@ impl Parse for WriteGenMacroInput {
     }
 }
 
-#[proc_macro_hack]
+#[proc_macro]
 pub fn write_gen(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let expr = parse_macro_input!(input as WriteGenMacroInput);
     write_gen_impl(expr)
@@ -85,7 +84,7 @@ impl Parse for SnippetMacroInput {
     }
 }
 
-#[proc_macro_hack]
+#[proc_macro]
 pub fn snippet(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let expr = parse_macro_input!(input as SnippetMacroInput);
     snippet_impl(expr)

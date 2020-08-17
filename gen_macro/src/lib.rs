@@ -1,11 +1,7 @@
-use proc_macro_hack::proc_macro_hack;
 use std::io::{self, Write};
 
-#[proc_macro_hack]
-pub use gen_macro_impl::write_gen;
-
-#[proc_macro_hack]
 pub use gen_macro_impl::snippet;
+pub use gen_macro_impl::write_gen;
 
 pub trait Gen<Ctx = ()> {
     fn gen(&self, ctx: &Ctx, writer: &mut CodeWriter<'_>) -> io::Result<()>;

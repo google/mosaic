@@ -1,5 +1,5 @@
 extern crate pod_bind;
-use pod_bind::Pod;
+use pod_bind::export::Pod;
 
 fn main() {
     let mut pod = Pod {

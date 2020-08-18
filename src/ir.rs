@@ -52,6 +52,8 @@ impl Def {
     }
 }
 
+/// An import from Rust into C++. Also synthesized for each item in the C++
+/// rust_export namespace.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CcSourceImport {
     pub import: bindings::Import,
@@ -115,7 +117,7 @@ impl CcSourceBindingsLib {
         }
 
         // If there was nothing to lower, just exit now.
-        let root_ns = match root_ns {
+        let bind_ns = match root_ns {
             Some(ns) => ns,
             None => {
                 let empty = db.intern_module(rs::Module {
@@ -132,22 +134,24 @@ impl CcSourceBindingsLib {
             .iter()
             .flat_map(|lib| lib.items.iter())
             .map(|import| {
-                let path: rs::Path = Some(rs::Ident::from("crate")) // TODO represent this properly
-                    .iter()
-                    .chain(import.import.path.iter())
-                    .cloned()
-                    .collect();
+                let path: rs::Path = [
+                    rs::Ident::from("crate"), // TODO represent this properly
+                    rs::Ident::from("bind"),
+                ]
+                .iter()
+                .chain(import.import.path.iter())
+                .cloned()
+                .collect();
                 let (item, _) = lower_def(import.def);
                 (path, item)
             })
             .map(|(path, def)| rs::ItemKind::Reexport(db.intern_path(path), Box::new(def)))
             .collect();
-        let export_mod = rs::ItemKind::Module(db.intern_module(rs::Module {
+        let export_mod = db.intern_module(rs::Module {
             name: rs::Ident::from("export"),
             vis: rs::Visibility::Public,
             children: reexports,
-        }));
-        namespaces.get_mut(&root_ns).unwrap().items.push(export_mod);
+        });
 
         // Recursively lower each namespace with its list of children.
         fn lower_ns(
@@ -155,19 +159,19 @@ impl CcSourceBindingsLib {
             ns: cc::NamespaceId,
             namespaces: &HashMap<cc::NamespaceId, NsInfo>,
             lowered: &mut HashMap<cc::NamespaceId, rs::ModuleId>,
-            is_root: bool,
+            is_bind_root: bool,
         ) -> rs::ModuleId {
             if let Some(id) = lowered.get(&ns) {
                 *id
             } else {
                 let info = &namespaces[&ns];
                 let id = db.intern_module(rs::Module {
-                    name: ns.lookup(db).name,
-                    vis: if is_root {
-                        rs::Visibility::Public
+                    name: if is_bind_root {
+                        rs::Ident::from("bind")
                     } else {
-                        rs::Visibility::Crate
+                        ns.lookup(db).name
                     },
+                    vis: rs::Visibility::Crate,
                     children: info
                         .items
                         .iter()
@@ -182,8 +186,16 @@ impl CcSourceBindingsLib {
             }
         }
         let mut lowered = HashMap::new();
-        let root = lower_ns(db, root_ns, &namespaces, &mut lowered, true);
+        let bind_mod = lower_ns(db, bind_ns, &namespaces, &mut lowered, true);
 
+        let root = db.intern_module(rs::Module {
+            name: rs::Ident::from(""),
+            vis: rs::Visibility::Public,
+            children: vec![
+                rs::ItemKind::Module(export_mod),
+                rs::ItemKind::Module(bind_mod),
+            ],
+        });
         Outcome::from_parts(rs::BindingsCrate { root }, errs)
     }
 }

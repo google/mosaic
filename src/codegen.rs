@@ -349,16 +349,18 @@ mod tests {
               using ::Pod;
             }
         } => r#"
-            #[repr(C, align(8))]
-            pub struct Pod {
-                pub a: i32,
-                pub b: i32,
-                pub e: i8,
-                pub c: f64,
-                pub d: f64,
-            }
             pub mod export {
-                pub use crate::Pod;
+                pub use crate::bind::Pod;
+            }
+            pub(crate) mod bind {
+                #[repr(C, align(8))]
+                pub struct Pod {
+                    pub a: i32,
+                    pub b: i32,
+                    pub e: i8,
+                    pub c: f64,
+                    pub d: f64,
+                }
             }
         "#);
     }
@@ -378,19 +380,21 @@ mod tests {
                 using ::Bar;
             }
         } => r#"
-            #[repr(C, align(4))]
-            pub struct Bar {
-                pub c: i8,
-                pub d: i8,
-                foo: Foo,
-            }
-            #[repr(C, align(4))]
-            struct Foo {
-                pub a: i32,
-                pub b: i32,
-            }
             pub mod export {
-                pub use crate::Bar;
+                pub use crate::bind::Bar;
+            }
+            pub(crate) mod bind {
+                #[repr(C, align(4))]
+                pub struct Bar {
+                    pub c: i8,
+                    pub d: i8,
+                    foo: Foo,
+                }
+                #[repr(C, align(4))]
+                struct Foo {
+                    pub a: i32,
+                    pub b: i32,
+                }
             }
         "#);
     }
@@ -415,46 +419,48 @@ mod tests {
                 using ns::Bar;
             }
         } => r#"
-            #[repr(C, align(4))]
-            pub struct Foo {
-                pub a: i32,
-                pub b: i32,
-            }
-            pub trait Foo_sum_Ext {
-                fn sum(self, c: i32, _1__: i32) -> i32;
-            }
-            impl Foo_sum_Ext for ::core::ptr::NonNull<Foo> {
-                fn sum(self, c: i32, _1__: i32) -> i32 {
-                    extern "C" { fn _bind_Foo__sum(this: *mut Foo, c: i32, _1__: i32) -> i32; }
-                    unsafe { _bind_Foo__sum(self.as_ptr(), c, _1__) }
-                }
-            }
-            impl Foo {
-                pub fn sum(&mut self, c: i32, _1__: i32) -> i32 {
-                    ::core::ptr::NonNull::from(self).sum(c, _1__)
-                }
-            }
             pub mod export {
-                pub use crate::Foo;
-                pub use crate::ns::Bar;
+                pub use crate::bind::Foo;
+                pub use crate::bind::ns::Bar;
             }
-            pub(crate) mod ns {
+            pub(crate) mod bind {
                 #[repr(C, align(4))]
-                pub struct Bar {
-                    pub x: i32,
+                pub struct Foo {
+                    pub a: i32,
+                    pub b: i32,
                 }
-                pub trait Bar_frob_Ext {
-                    fn frob(self, ) -> i8;
+                pub trait Foo_sum_Ext {
+                    fn sum(self, c: i32, _1__: i32) -> i32;
                 }
-                impl Bar_frob_Ext for ::core::ptr::NonNull<Bar> {
-                    fn frob(self, ) -> i8 {
-                        extern "C" { fn _bind_Bar__frob(this: *mut Bar, ) -> i8; }
-                        unsafe { _bind_Bar__frob(self.as_ptr(), ) }
+                impl Foo_sum_Ext for ::core::ptr::NonNull<Foo> {
+                    fn sum(self, c: i32, _1__: i32) -> i32 {
+                        extern "C" { fn _bind_Foo__sum(this: *mut Foo, c: i32, _1__: i32) -> i32; }
+                        unsafe { _bind_Foo__sum(self.as_ptr(), c, _1__) }
                     }
                 }
-                impl Bar {
-                    pub fn frob(&mut self, ) -> i8 {
-                        ::core::ptr::NonNull::from(self).frob()
+                impl Foo {
+                    pub fn sum(&mut self, c: i32, _1__: i32) -> i32 {
+                        ::core::ptr::NonNull::from(self).sum(c, _1__)
+                    }
+                }
+                pub(crate) mod ns {
+                    #[repr(C, align(4))]
+                    pub struct Bar {
+                        pub x: i32,
+                    }
+                    pub trait Bar_frob_Ext {
+                        fn frob(self, ) -> i8;
+                    }
+                    impl Bar_frob_Ext for ::core::ptr::NonNull<Bar> {
+                        fn frob(self, ) -> i8 {
+                            extern "C" { fn _bind_Bar__frob(this: *mut Bar, ) -> i8; }
+                            unsafe { _bind_Bar__frob(self.as_ptr(), ) }
+                        }
+                    }
+                    impl Bar {
+                        pub fn frob(&mut self, ) -> i8 {
+                            ::core::ptr::NonNull::from(self).frob()
+                        }
                     }
                 }
             }
@@ -487,19 +493,21 @@ mod tests {
                 using ::Bar;
             }
         } => r#"
-            #[repr(C, align(4))]
-            struct Foo {
-                pub a: i32,
-                pub b: i32,
-            }
-            #[repr(C, align(4))]
-            pub struct Bar {
-                pub c: i8,
-                pub d: i8,
-                foo: Foo,
-            }
             pub mod export {
-                pub use crate::Bar;
+                pub use crate::bind::Bar;
+            }
+            pub(crate) mod bind {
+                #[repr(C, align(4))]
+                struct Foo {
+                    pub a: i32,
+                    pub b: i32,
+                }
+                #[repr(C, align(4))]
+                pub struct Bar {
+                    pub c: i8,
+                    pub d: i8,
+                    foo: Foo,
+                }
             }
         "#);
     }
@@ -518,13 +526,15 @@ mod tests {
             }
         } => r#"
             pub mod export {
-                pub use crate::ns::Foo;
+                pub use crate::bind::ns::Foo;
             }
-            pub(crate) mod ns {
-                #[repr(C, align(4))]
-                pub struct Foo {
-                    pub a: i32,
-                    pub b: i32,
+            pub(crate) mod bind {
+                pub(crate) mod ns {
+                    #[repr(C, align(4))]
+                    pub struct Foo {
+                        pub a: i32,
+                        pub b: i32,
+                    }
                 }
             }
         "#);

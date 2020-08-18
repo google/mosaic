@@ -29,7 +29,7 @@ pub trait DefIr {
 // If we actually use this for expressing exported/imported items, we may want
 // to make this representation more shallow, i.e. just names with semantic info
 // attached or only up to ast objects.
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum DefKind {
     CcDef(cc::ItemKind),
 }
@@ -98,15 +98,19 @@ impl CcSourceBindingsLib {
 
         // Lower each item and register its parent namespace.
         let mut errs = Diagnostics::new();
+        let mut lower_def = |def| match def {
+            DefKind::CcDef(cc::ItemKind::Struct(st)) => {
+                let (rs_id, err) = db.rs_struct_from_cc(st).split();
+                errs.append(err);
+                (rs::ItemKind::Struct(rs_id), Some(st.lookup(db).parent))
+            }
+        };
         for lib in libs {
             for def in lib.reachable_items(db) {
-                match def {
-                    DefKind::CcDef(cc::ItemKind::Struct(st)) => {
-                        let (rs_id, err) = db.rs_struct_from_cc(st).split();
-                        add_to_ns(st.lookup(db).parent, rs::ItemKind::Struct(rs_id));
-                        errs.append(err);
-                    }
-                };
+                let (item, parent_ns) = lower_def(def);
+                if let Some(parent) = parent_ns {
+                    add_to_ns(parent, item);
+                }
             }
         }
 
@@ -127,14 +131,16 @@ impl CcSourceBindingsLib {
         let reexports = libs
             .iter()
             .flat_map(|lib| lib.items.iter())
-            .map(|import| -> rs::Path {
-                Some(rs::Ident::from("crate")) // TODO represent this properly
+            .map(|import| {
+                let path: rs::Path = Some(rs::Ident::from("crate")) // TODO represent this properly
                     .iter()
                     .chain(import.import.path.iter())
                     .cloned()
-                    .collect()
+                    .collect();
+                let (item, _) = lower_def(import.def);
+                (path, item)
             })
-            .map(|path| rs::ItemKind::Reexport(db.intern_path(path)))
+            .map(|(path, def)| rs::ItemKind::Reexport(db.intern_path(path), Box::new(def)))
             .collect();
         let export_mod = rs::ItemKind::Module(db.intern_module(rs::Module {
             name: rs::Ident::from("export"),
@@ -149,31 +155,34 @@ impl CcSourceBindingsLib {
             ns: cc::NamespaceId,
             namespaces: &HashMap<cc::NamespaceId, NsInfo>,
             lowered: &mut HashMap<cc::NamespaceId, rs::ModuleId>,
+            is_root: bool,
         ) -> rs::ModuleId {
             if let Some(id) = lowered.get(&ns) {
                 *id
             } else {
                 let info = &namespaces[&ns];
-                let id =
-                    db.intern_module(rs::Module {
-                        name: ns.lookup(db).name,
-                        // TODO make these all pub(crate) and use the `exports` module
-                        vis: rs::Visibility::Public,
-                        children: info
-                            .items
-                            .iter()
-                            .copied()
-                            .chain(info.namespaces.iter().map(|id| {
-                                rs::ItemKind::Module(lower_ns(db, *id, namespaces, lowered))
-                            }))
-                            .collect(),
-                    });
+                let id = db.intern_module(rs::Module {
+                    name: ns.lookup(db).name,
+                    vis: if is_root {
+                        rs::Visibility::Public
+                    } else {
+                        rs::Visibility::Crate
+                    },
+                    children: info
+                        .items
+                        .iter()
+                        .cloned()
+                        .chain(info.namespaces.iter().map(|id| {
+                            rs::ItemKind::Module(lower_ns(db, *id, namespaces, lowered, false))
+                        }))
+                        .collect(),
+                });
                 lowered.insert(ns, id);
                 id
             }
         }
         let mut lowered = HashMap::new();
-        let root = lower_ns(db, root_ns, &namespaces, &mut lowered);
+        let root = lower_ns(db, root_ns, &namespaces, &mut lowered, true);
 
         Outcome::from_parts(rs::BindingsCrate { root }, errs)
     }
@@ -927,17 +936,21 @@ pub mod rs {
             if !this.vis.is_public() {
                 return vec![];
             }
-            let mut structs = vec![];
-            for child in self.lookup(db).children {
-                match child {
+            fn visit_item(db: &impl RsTargetIr, item: &ItemKind, structs: &mut Vec<StructId>) {
+                dbg!(item);
+                match item {
                     ItemKind::Module(id) => structs.append(&mut id.visible_structs(db)),
-                    ItemKind::Reexport(_id) => (), // TODO
+                    ItemKind::Reexport(_, target) => visit_item(db, &target, structs),
                     ItemKind::Struct(id) => {
                         if id.lookup(db).vis.is_public() {
-                            structs.push(id)
+                            structs.push(*id)
                         }
                     }
                 }
+            }
+            let mut structs = vec![];
+            for child in self.lookup(db).children {
+                visit_item(db, &child, &mut structs);
             }
             structs
         }
@@ -1010,11 +1023,11 @@ pub mod rs {
         }
     }
 
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub enum ItemKind {
         Module(ModuleId),
         Struct(StructId),
-        Reexport(PathId),
+        Reexport(PathId, Box<ItemKind>),
     }
 
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -1027,6 +1040,7 @@ pub mod rs {
     #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
     pub enum Visibility {
         Public,
+        Crate,
         Private,
     }
     impl Visibility {

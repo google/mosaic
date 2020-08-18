@@ -24,7 +24,18 @@ fn cc_use_impl(input: CcUse) -> TokenStream {
         .expect("CARGO_PKG_NAME or PKG_NAME must be defined")
         .to_owned();
     let bind_crate_name = Ident::new(&(crate_name + "_bind"), Span::call_site());
-    let paths: Punctuated<_, Token![,]> = input.cc_paths.iter().collect();
+    let paths: Punctuated<_, Token![,]> = input
+        .cc_paths
+        .iter()
+        .map(|path| -> Punctuated<syn::PathSegment, Token![::]> {
+            // We put all exported items in a module named `export`.
+            let export = Ident::new("export", Span::call_site());
+            [export.into(), path.segments.last().unwrap().clone()]
+                .iter()
+                .cloned()
+                .collect()
+        })
+        .collect();
     quote! {
         use #bind_crate_name::{#paths};
     }

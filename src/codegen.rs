@@ -99,7 +99,7 @@ fn gen_module_contents(
                     }
                 ")?;
             }
-            rs::ItemKind::Reexport(path_id) => {
+            rs::ItemKind::Reexport(path_id, _) => {
                 if let Some(rs) = out.rs.as_mut() {
                     let path = path_id.lookup(db);
                     write_gen!(db, rs, "
@@ -117,6 +117,7 @@ impl<DB: RsTargetIr> Gen<DB> for rs::Visibility {
     fn gen(&self, _db: &DB, f: &mut CodeWriter) -> io::Result<()> {
         Ok(match self {
             rs::Visibility::Public => write!(f, "pub ")?,
+            rs::Visibility::Crate => write!(f, "pub(crate) ")?,
             rs::Visibility::Private => (),
         })
     }
@@ -437,7 +438,7 @@ mod tests {
                 pub use crate::Foo;
                 pub use crate::ns::Bar;
             }
-            pub mod ns {
+            pub(crate) mod ns {
                 #[repr(C, align(4))]
                 pub struct Bar {
                     pub x: i32,
@@ -519,7 +520,7 @@ mod tests {
             pub mod export {
                 pub use crate::ns::Foo;
             }
-            pub mod ns {
+            pub(crate) mod ns {
                 #[repr(C, align(4))]
                 pub struct Foo {
                     pub a: i32,

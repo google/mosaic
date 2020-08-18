@@ -78,6 +78,69 @@ impl CcSourceBindingsLib {
         db: &(impl DefIr + cc::RsTargetIr + cc::CcModule),
         libs: &[Arc<CcSourceBindingsLib>],
     ) -> Outcome<rs::BindingsCrate> {
+        // In addition to lowering every C++ item in this lib, this function is
+        // responsible for creating the structure of the RsBindingsCrate. In
+        // particular, it:
+        //
+        // 1. Converts from a "parent id" scheme in CcSourceIr to "list of
+        //    children" in RsTargetIr
+        // 2. Mirrors the namespace nesting of the original C++ items as Rust
+        //    modules
+        // 3. Reexports all imported items in a public top-level `export` module
+        // 4. Puts all bound items in a top-level `bind` module
+        //
+        // (1) is the reason to do all this work in one place: We need a global
+        // view to see what all the children of each module are. It might be
+        // possible to move to a more "progressive lowering" scheme in the
+        // future by only looking at the set of imports here.
+        //
+        // (2) helps us avoid name collisions between C++ source items in
+        // different namespaces, which may be reachable to us but whose names
+        // aren't actually imported into Rust (otherwise they would conflict in
+        // `export`, see below).
+        //
+        // The `export` module exists to solve a particular problem: We cannot
+        // represent nested C++ classes directly in Rust. Instead, we have to
+        // take a class definition like `Foo::Bar` and rewrite its path somehow.
+        //
+        // Since the cc_use! macro can't know semantic information about the C++
+        // items it's importing, we have a problem: how can we know when a path
+        // we're seeing is actually a nested class, and needs rewriting? Since we
+        // can't, we rely on the logic in this method that gathers all imported
+        // items directly under the `export` namespace, and rewrite *all* imports
+        // to be from `export`. So `Foo::Bar` becomes `use export::Bar`, for
+        // instance.
+        //
+        // There is a problem with this, though: multiple cc_use!'s may import
+        // different items, and if two of them import different items with the
+        // same name, their names will conflict in the `export` module. For now
+        // we accept this (quite) unfortunate limitation, but we could solve it
+        // by generating some kind of deterministic submodule name for each
+        // cc_use. It's possible that another way of solving the overall problem
+        // (below) will solve this, too, though.
+        //
+        // Finally, we have the `bind` module, which ensures all imports go
+        // through `cc_use!` (or at least the `export` module) and also prevents
+        // names in the C++ bindings from colliding with the `export` module
+        // iteslf.
+        //
+        // ---
+        //
+        // It may be possible to solve the above problem with nested classes
+        // with a simple set of renaming rules. In short, we would rename C++
+        // items to follow Rust naming conventions (which may be desirable
+        // anyway), transforming names like `std::vector` to `std::Vector`.
+        // Anytime a class is used as a namespace, that will be lowered to a
+        // seprate module in Rust with a lowercase name, so in our example
+        // above, `Foo` remains `Foo` but `Foo::Bar` becomes `foo::Bar`.
+        //
+        // Since we'd make the paths used in `cc_use!` match these rewritten
+        // names, the macro doesn't actually have to know about any of this; we
+        // can expose this entire hierarchy starting from the crate root and do
+        // away with the `export` and `bind` modules. And since the bindings
+        // generator runs first, we can use semantic C++ information to give
+        // helpful error messages if the import paths are incorrect.
+
         #[derive(Default)]
         struct NsInfo {
             namespaces: Vec<cc::NamespaceId>,

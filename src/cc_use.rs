@@ -281,7 +281,7 @@ impl From<&CcPath> for ir::cc::Path {
             .iter()
             .map(|segment| {
                 assert!(segment.arguments.is_empty());
-                ir::cc::Ident::from(segment.ident.to_string())
+                ir::cc::PathComponent::from(ir::cc::Ident::from(segment.ident.to_string()))
             })
             .collect()
     }

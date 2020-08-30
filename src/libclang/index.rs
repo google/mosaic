@@ -1,6 +1,6 @@
 //! A lazily populated index for looking up entities by name.
 
-use crate::ir::cc::{Ident, Path};
+use crate::ir::cc::{Ident, Path, PathComponent};
 use clang::{self, Entity, EntityKind};
 use std::collections::HashMap;
 
@@ -40,11 +40,11 @@ impl NodeId {
 pub struct Node<'tu> {
     //kind: EntityKind,
     pub entities: Vec<Entity<'tu>>,
-    items: Option<HashMap<Ident, NodeId>>,
+    items: Option<HashMap<PathComponent, NodeId>>,
     inline_items: Vec<NodeId>,
 }
 impl<'tu> Node<'tu> {
-    fn items_mut(&mut self) -> &mut HashMap<Ident, NodeId> {
+    fn items_mut(&mut self) -> &mut HashMap<PathComponent, NodeId> {
         self.items.as_mut().unwrap()
     }
 }
@@ -104,13 +104,13 @@ impl<'tu> PathIndex<'tu> {
 
     /// Returns the child named `child` of the given `node`.
     #[allow(dead_code)]
-    pub fn child_of(&mut self, node: NodeId, child: &Ident) -> Result<Option<&Node>> {
+    pub fn child_of(&mut self, node: NodeId, child: &PathComponent) -> Result<Option<&Node>> {
         self.child_id_of(node, child)
             .map(|opt| opt.map(move |id| self.node(id)))
     }
 
     /// Returns the `NodeId` of the child named `child` of the given `node`.
-    pub fn child_id_of(&mut self, node: NodeId, child: &Ident) -> Result<Option<NodeId>> {
+    pub fn child_id_of(&mut self, node: NodeId, child: &PathComponent) -> Result<Option<NodeId>> {
         if self.node(node).items.is_none() {
             self.expand(node)?;
         }
@@ -136,7 +136,7 @@ impl<'tu> PathIndex<'tu> {
     fn populate_children(&mut self, parent: NodeId, ent: Entity<'tu>) -> Result<()> {
         for child in ent.get_children() {
             let name = match child.get_name() {
-                Some(name) => Ident::from(name),
+                Some(name) => PathComponent::from(Ident::from(name)),
                 None => continue,
             };
             let child_id = self.get_or_insert_child(parent, name);
@@ -151,7 +151,7 @@ impl<'tu> PathIndex<'tu> {
         Ok(())
     }
 
-    fn get_or_insert_child(&mut self, parent: NodeId, child: Ident) -> NodeId {
+    fn get_or_insert_child(&mut self, parent: NodeId, child: PathComponent) -> NodeId {
         let next_id = self.next_node_id();
         let child_id = *self
             .node_mut(parent)
@@ -212,24 +212,5 @@ mod tests {
         assert!(index.lookup(&Path::from("std::vector")).is_ok());
         assert!(index.lookup(&Path::from("std::notinline::foo")).is_ok());
         assert!(index.lookup(&Path::from("std::foo")).is_err());
-    }
-
-    #[test]
-    fn paths() {
-        assert_eq!(
-            Path::from("::std::stuff::basic_iterator"),
-            Path::from("std::stuff::basic_iterator")
-        );
-        assert_eq!(
-            Path::from("::std::vector<bool>::basic_iterator")
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-            ["std", "vector<bool>", "basic_iterator"]
-                .iter()
-                .copied()
-                .map(Ident::from)
-                .collect::<Vec<_>>()
-        );
     }
 }

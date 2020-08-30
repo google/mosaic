@@ -118,6 +118,7 @@ impl<'tu> ExportKind<'tu> {
             if ent.get_kind() == EntityKind::TranslationUnit {
                 break;
             }
+            // TODO: If there are template params on this entity, collect them here.
             components.push(ent.get_name().unwrap());
             parent = ent.get_semantic_parent();
         }
@@ -126,6 +127,7 @@ impl<'tu> ExportKind<'tu> {
                 .into_iter()
                 .rev()
                 .map(Ident::from)
+                .map(PathComponent::from)
                 .collect::<Path>(),
         )
     }
@@ -246,7 +248,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         // Assume this would be an ordinary using decl. TODO: Don't.
         let span = self.span(ent); // TODO this should be a span to the rust cc_use
         self.maybe_add_export(
-            path.iter().last().unwrap().clone(),
+            path.iter().last().unwrap().name.clone(),
             ExportKind::Decl(ent),
             span,
             exports,

@@ -53,8 +53,8 @@ pub(super) fn cc_item(
         let mut indices = HashMap::new();
         let errs = Diagnostics::build(|mut diags| {
             ctx.handle_rust_import(
-                &import.path,
-                &import.span,
+                import.path.clone(),
+                import.span.clone(),
                 &mut index,
                 &mut exports,
                 &mut indices,
@@ -82,7 +82,7 @@ struct Export<'tu> {
     /// Path to the actual thing being exported.
     ///
     /// None if ambiguous (there should be an error in this case.)
-    path: Option<Path>,
+    path: Option<bindings::Path>,
     kind: ExportKind<'tu>,
     span: Span,
 }
@@ -110,7 +110,8 @@ impl<'tu> ExportKind<'tu> {
         }
     }
 
-    fn path(&self) -> Option<Path> {
+    /// Creates a synthetic bindings path for the C++ entity.
+    fn synthetic_path(&self) -> Option<bindings::Path> {
         let target_decl = self.declaration()?;
         let mut components = vec![target_decl.get_name().unwrap()];
         let mut parent = target_decl.get_semantic_parent();
@@ -127,8 +128,8 @@ impl<'tu> ExportKind<'tu> {
                 .into_iter()
                 .rev()
                 .map(Ident::from)
-                .map(PathComponent::from)
-                .collect::<Path>(),
+                .map(bindings::PathComponent::from)
+                .collect::<bindings::Path>(),
         )
     }
 }
@@ -169,7 +170,15 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         match self.make_export(decl) {
             Some(kind) => {
                 let name = decl.get_name().unwrap().into();
-                self.maybe_add_export(name, kind, self.span(decl), exports, indices, diags);
+                self.maybe_add_export(
+                    name,
+                    kind.synthetic_path(),
+                    kind,
+                    self.span(decl),
+                    exports,
+                    indices,
+                    diags,
+                );
             }
             None => diags.add(Diagnostic::error(
                 "invalid rust_export item",
@@ -193,6 +202,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
     fn maybe_add_export(
         &self,
         name: Ident,
+        path: Option<bindings::Path>,
         kind: ExportKind<'tu>,
         span: Span,
         exports: &mut Vec<Export<'tu>>,
@@ -214,7 +224,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         }
         exports.push(Export {
             name,
-            path: kind.path(),
+            path,
             kind,
             span,
         });
@@ -222,14 +232,14 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
 
     fn handle_rust_import(
         &self,
-        path: &Path,
-        span: &Span,
+        path: bindings::Path,
+        span: Span,
         index: &mut index::PathIndex<'tu>,
         exports: &mut Vec<Export<'tu>>,
         indices: &mut HashMap<Ident, usize>,
         diags: &mut Diagnostics,
     ) {
-        let ent = match index.lookup(path) {
+        let ent = match index.lookup(&path) {
             Ok(node) => match node.entities.as_slice() {
                 [ent] => *ent,
                 [] => unreachable!(),
@@ -249,6 +259,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         let span = self.span(ent); // TODO this should be a span to the rust cc_use
         self.maybe_add_export(
             path.iter().last().unwrap().name.clone(),
+            Some(path),
             ExportKind::Decl(ent),
             span,
             exports,

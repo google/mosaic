@@ -272,6 +272,7 @@ macro_rules! impl_gen_from_display {
     };
 }
 
+impl_gen_from_display!(cc::Path);
 impl_gen_from_display!(rs::Align);
 impl_gen_from_display!(rs::Ident);
 impl_gen_from_display!(rs::Path);

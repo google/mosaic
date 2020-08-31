@@ -274,14 +274,16 @@ fn error(db: &impl SourceFileCache, file_id: FileId, input: syn::Error) -> Diagn
     })
 }
 
-impl From<&CcPath> for ir::cc::Path {
+impl From<&CcPath> for ir::bindings::Path {
     fn from(other: &CcPath) -> Self {
         other
             .segments
             .iter()
             .map(|segment| {
                 assert!(segment.arguments.is_empty());
-                ir::cc::PathComponent::from(ir::cc::Ident::from(segment.ident.to_string()))
+                ir::bindings::PathComponent::from(ir::bindings::Ident::from(
+                    segment.ident.to_string(),
+                ))
             })
             .collect()
     }

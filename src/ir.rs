@@ -12,7 +12,11 @@ use crate::diagnostics::{err, ok, Diagnostic, Diagnostics, Outcome, Span};
 use crate::libclang::CcSourceIr;
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU16;
-use std::{fmt, iter, sync::Arc};
+use std::{
+    fmt::{self, Debug, Display},
+    iter::FromIterator,
+    sync::Arc,
+};
 
 #[salsa::query_group(DefIrStorage)]
 pub trait DefIr {
@@ -203,6 +207,7 @@ impl CcSourceBindingsLib {
                 .iter()
                 .chain(import.import.path.iter())
                 .cloned()
+                .map(Into::into)
                 .collect();
                 let (item, _) = lower_def(import.def);
                 (path, item)
@@ -398,24 +403,27 @@ mod common {
         }
     }
 
-    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
-    pub struct PathComponent {
+    /// A component in a path, with possible generic arguments.
+    ///
+    /// In the path `std::vector<int>`, the components are `std` and
+    /// `vector<int>`.
+    #[derive(Clone, Hash, Eq, PartialEq)]
+    pub struct PathComponent<P> {
         pub name: Ident,
-        pub args: Vec<Path>,
+        pub args: Vec<P>,
     }
-    impl From<Ident> for PathComponent {
-        fn from(name: Ident) -> Self {
-            Self { name, args: vec![] }
-        }
-    }
-    impl fmt::Display for PathComponent {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    impl<P: Display> PathComponent<P> {
+        fn print_component(&self, f: &mut fmt::Formatter<'_>, turbofish: bool) -> fmt::Result {
             write!(f, "{}", self.name)?;
             if !self.args.is_empty() {
-                write!(f, "<")?;
+                if turbofish {
+                    write!(f, "::<")?;
+                } else {
+                    write!(f, "<")?;
+                }
                 let mut args = self.args.iter().peekable();
-                while let Some(token) = args.next() {
-                    write!(f, "{}", token)?;
+                while let Some(path) = args.next() {
+                    write!(f, "{}", path)?;
                     if args.peek().is_some() {
                         write!(f, ", ")?;
                     }
@@ -424,62 +432,15 @@ mod common {
             }
             Ok(())
         }
-    }
 
-    /// A C++ or Rust fully-qualified name.
-    ///
-    /// Example: `std::vector<int>`.
-    #[derive(Clone, Hash, Eq, PartialEq)]
-    pub struct Path {
-        components: Vec<PathComponent>,
-    }
-    impl From<&str> for Path {
-        fn from(mut path: &str) -> Path {
-            if path.starts_with("::") {
-                path = &path[2..];
-            }
-            Path {
-                components: path
-                    .split("::")
-                    .map(Ident::from)
-                    .map(PathComponent::from)
-                    .collect(),
-            }
-        }
-    }
-    impl From<String> for Path {
-        fn from(path: String) -> Path {
-            From::from(path.as_str())
-        }
-    }
-    impl iter::FromIterator<PathComponent> for Path {
-        fn from_iter<T: IntoIterator<Item = PathComponent>>(iter: T) -> Path {
-            Path {
-                components: iter.into_iter().collect(),
-            }
-        }
-    }
-    //impl iter::FromIterator<Ident> for Path {
-    //    fn from_iter<T: IntoIterator<Item = Ident>>(iter: T) -> Path {
-    //        Path {
-    //            components: iter.into_iter().map(PathComponent::from).collect(),
-    //        }
-    //    }
-    //}
-    impl Path {
-        pub fn iter(&self) -> impl Iterator<Item = &PathComponent> {
-            self.components.iter()
-        }
-        pub fn join(mut self, next: PathComponent) -> Path {
-            self.components.push(next);
-            self
-        }
-    }
-    impl fmt::Display for Path {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            let mut components = self.iter().peekable();
+        pub(super) fn print(
+            components: &[Self],
+            f: &mut fmt::Formatter,
+            turbofish: bool,
+        ) -> fmt::Result {
+            let mut components = components.iter().peekable();
             while let Some(comp) = components.next() {
-                write!(f, "{}", comp)?;
+                comp.print_component(f, turbofish)?;
                 if components.peek().is_some() {
                     write!(f, "::")?;
                 }
@@ -487,9 +448,14 @@ mod common {
             Ok(())
         }
     }
-    impl fmt::Debug for Path {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "{}", self)
+    impl<P> From<Ident> for PathComponent<P> {
+        fn from(name: Ident) -> Self {
+            Self { name, args: vec![] }
+        }
+    }
+    impl<P: Display> Debug for PathComponent<P> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.print_component(f, true)
         }
     }
 
@@ -544,11 +510,37 @@ mod common {
     }
 }
 
-/// IR that represents the bindings between two languages.
+/// IR that represents the bindings declarations between two languages.
 pub mod bindings {
     use super::*;
+
     pub use crate::libclang::ModuleId;
-    pub use common::Path;
+    pub use common::Ident;
+    pub type PathComponent = common::PathComponent<Path>;
+
+    /// A path in a cc_use macro.
+    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    pub struct Path(pub(super) Vec<PathComponent>);
+    impl Path {
+        pub fn iter(&self) -> impl Iterator<Item = &PathComponent> {
+            self.0.iter()
+        }
+        #[allow(dead_code)]
+        pub fn join(mut self, component: PathComponent) -> Self {
+            self.0.push(component);
+            self
+        }
+    }
+    impl FromIterator<PathComponent> for Path {
+        fn from_iter<I: IntoIterator<Item = PathComponent>>(iter: I) -> Self {
+            Self(iter.into_iter().collect())
+        }
+    }
+    impl fmt::Display for Path {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            PathComponent::print(&self.0, f, true)
+        }
+    }
 
     /// A C++ header file.
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -572,7 +564,7 @@ pub mod cc {
     use super::*;
     use crate::libclang::CcSourceIr;
 
-    pub use common::{Align, Ident, Offset, Path, PathComponent, Size, TypeRef};
+    pub use common::{Align, Ident, Offset, Size, TypeRef};
 
     mod bindings {
         use super::*;
@@ -659,6 +651,14 @@ pub mod cc {
         }
     }
 
+    intern_key!(NamespaceId);
+    impl NamespaceId {
+        #[allow(unused)]
+        pub fn lookup(&self, db: &impl CcSourceIr) -> Namespace {
+            db.lookup_intern_cc_namespace(*self)
+        }
+    }
+
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
     pub enum ItemKind {
         Struct(StructId),
@@ -669,11 +669,29 @@ pub mod cc {
         }
     }
 
-    intern_key!(NamespaceId);
-    impl NamespaceId {
-        #[allow(unused)]
-        pub fn lookup(&self, db: &impl CcSourceIr) -> Namespace {
-            db.lookup_intern_cc_namespace(*self)
+    pub type PathComponent = common::PathComponent<Path>;
+
+    /// A C++ path, like `std::vector<int>::iterator`.
+    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    pub struct Path(Vec<PathComponent>);
+    impl Path {
+        #[allow(dead_code)]
+        pub fn iter(&self) -> impl Iterator<Item = &PathComponent> {
+            self.0.iter()
+        }
+        pub fn join(mut self, component: PathComponent) -> Self {
+            self.0.push(component);
+            self
+        }
+    }
+    impl FromIterator<PathComponent> for Path {
+        fn from_iter<I: IntoIterator<Item = PathComponent>>(iter: I) -> Self {
+            Self(iter.into_iter().collect())
+        }
+    }
+    impl fmt::Display for Path {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            PathComponent::print(&self.0, f, false)
         }
     }
 
@@ -685,7 +703,11 @@ pub mod cc {
     impl Namespace {
         pub fn path(&self, db: &impl CcSourceIr) -> Path {
             match self.parent {
-                Some(parent) => parent.lookup(db).path(db).join(self.name.clone().into()),
+                Some(parent) => parent
+                    .lookup(db)
+                    .path(db)
+                    .join(self.name.clone().into())
+                    .into(),
                 None => std::iter::once(self.name.clone().into()).collect(),
             }
         }
@@ -832,6 +854,7 @@ pub mod cc {
                 .lookup(db)
                 .path(db)
                 .join(self.name.clone().into())
+                .into()
         }
     }
 
@@ -999,7 +1022,7 @@ pub mod rs {
     use super::*;
     use cc::RsTargetIr;
 
-    pub use common::{Align, Ident, Offset, Path, Size, TypeRef};
+    pub use common::{Align, Ident, Offset, Size, TypeRef};
 
     /// Code for bindings targeting Rust.
     mod bindings {
@@ -1091,6 +1114,51 @@ pub mod rs {
     impl StructId {
         pub fn lookup(&self, db: &impl cc::RsTargetIr) -> Struct {
             db.lookup_intern_struct(*self)
+        }
+    }
+
+    pub type PathComponent = common::PathComponent<Path>;
+
+    /// A Rust path, like `std::Vec::<i32>::clone`.
+    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    pub struct Path(Vec<PathComponent>);
+    impl Path {
+        #[allow(dead_code)]
+        pub fn iter(&self) -> impl Iterator<Item = &PathComponent> {
+            self.0.iter()
+        }
+        #[allow(dead_code)]
+        pub fn join(mut self, component: PathComponent) -> Self {
+            self.0.push(component);
+            self
+        }
+    }
+    impl FromIterator<PathComponent> for Path {
+        fn from_iter<I: IntoIterator<Item = PathComponent>>(iter: I) -> Self {
+            Self(iter.into_iter().collect())
+        }
+    }
+    impl fmt::Display for Path {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            PathComponent::print(&self.0, f, true)
+        }
+    }
+
+    // By design, cc_use paths use exactly the same identifiers as the Rust
+    // paths they result in, so this conversion works. They aren't aliased to
+    // the same type because I expect there to be annotations and other things
+    // we allow in cc_use paths but not here.
+    impl From<super::bindings::PathComponent> for PathComponent {
+        fn from(other: super::bindings::PathComponent) -> Self {
+            PathComponent {
+                name: other.name,
+                args: other.args.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+    impl From<super::bindings::Path> for Path {
+        fn from(p: super::bindings::Path) -> Self {
+            Self(p.0.into_iter().map(Into::into).collect())
         }
     }
 
@@ -1239,6 +1307,7 @@ pub mod rs {
 mod tests {
     use super::*;
     use crate::Session;
+    use std::iter;
 
     #[test]
     fn align() {
@@ -1251,23 +1320,41 @@ mod tests {
     }
 
     #[test]
-    fn paths() {
-        use common::{Ident, Path, PathComponent};
+    fn print_paths() {
+        use common::Ident;
         assert_eq!(
-            Path::from("::std::stuff::basic_iterator"),
-            Path::from("std::stuff::basic_iterator")
+            [
+                Ident::from("std").into(),
+                cc::PathComponent {
+                    name: Ident::from("vector"),
+                    args: vec![cc::Path::from_iter(iter::once(
+                        Ident::from("string").into()
+                    ))]
+                },
+                Ident::from("iterator").into()
+            ]
+            .iter()
+            .cloned()
+            .collect::<cc::Path>()
+            .to_string(),
+            "std::vector<string>::iterator"
         );
         assert_eq!(
-            Path::from("::std::string::basic_iterator")
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-            ["std", "string", "basic_iterator"]
-                .iter()
-                .copied()
-                .map(Ident::from)
-                .map(PathComponent::from)
-                .collect::<Vec<_>>()
+            [
+                Ident::from("std").into(),
+                rs::PathComponent {
+                    name: Ident::from("vector"),
+                    args: vec![rs::Path::from_iter(iter::once(
+                        Ident::from("string").into()
+                    ))]
+                },
+                Ident::from("iterator").into()
+            ]
+            .iter()
+            .cloned()
+            .collect::<rs::Path>()
+            .to_string(),
+            "std::vector::<string>::iterator"
         );
     }
 

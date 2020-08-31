@@ -1,6 +1,6 @@
 //! A lazily populated index for looking up entities by name.
 
-use crate::ir::cc::{Ident, Path, PathComponent};
+use crate::ir::bindings::{Ident, Path, PathComponent};
 use clang::{self, Entity, EntityKind};
 use std::collections::HashMap;
 
@@ -193,6 +193,13 @@ mod tests {
     use super::*;
     use crate::test_util;
 
+    fn path(p: &str) -> Path {
+        p.split("::")
+            .map(Ident::from)
+            .map(PathComponent::from)
+            .collect()
+    }
+
     #[test]
     fn inline_namespace() {
         let clang = &test_util::CLANG;
@@ -208,9 +215,9 @@ mod tests {
             }
         });
         let mut index = PathIndex::new(&file);
-        assert!(index.lookup(&Path::from("std::__1::vector")).is_ok());
-        assert!(index.lookup(&Path::from("std::vector")).is_ok());
-        assert!(index.lookup(&Path::from("std::notinline::foo")).is_ok());
-        assert!(index.lookup(&Path::from("std::foo")).is_err());
+        assert!(index.lookup(&path("std::__1::vector")).is_ok());
+        assert!(index.lookup(&path("std::vector")).is_ok());
+        assert!(index.lookup(&path("std::notinline::foo")).is_ok());
+        assert!(index.lookup(&path("std::foo")).is_err());
     }
 }

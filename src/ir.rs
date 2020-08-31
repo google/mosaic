@@ -536,6 +536,11 @@ pub mod bindings {
             Self(iter.into_iter().collect())
         }
     }
+    impl From<Vec<PathComponent>> for Path {
+        fn from(inner: Vec<PathComponent>) -> Self {
+            Self(inner)
+        }
+    }
     impl fmt::Display for Path {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             PathComponent::print(&self.0, f, true)

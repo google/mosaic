@@ -81,16 +81,17 @@ pub struct HeaderInfo {
 // Parse Rust file and return IR imports grouped by header.
 fn headers_with_imports(db: &impl RsImportIr) -> Arc<Outcome<Vec<HeaderInfo>>> {
     let file_id = db.rs_source_root().unwrap();
-    let headers = parse_rs_file(db, &file_id.contents(db), file_id).map(|macros| {
-        let mut headers = BTreeMap::new();
+    let headers = parse_rs_file(db, &file_id.contents(db), file_id).then(|macros| {
+        let mut header_map = BTreeMap::new();
         for mac in &macros {
-            headers
+            header_map
                 .entry((&mac.header.path, mac.header.is_system))
                 .or_insert((mac.header.span, Vec::new()))
                 .1
                 .push(&mac.cc_paths);
         }
-        headers
+        let mut errs = Diagnostics::new();
+        let headers = header_map
             .iter()
             .enumerate()
             .map(|(id, (hdr, macros))| {
@@ -103,11 +104,15 @@ fn headers_with_imports(db: &impl RsImportIr) -> Arc<Outcome<Vec<HeaderInfo>>> {
                 let imports = macros
                     .1
                     .iter()
-                    .flat_map(|cc_paths| {
-                        cc_paths.iter().map(|path| ir::bindings::Import {
+                    .copied()
+                    .flatten()
+                    .flat_map(|cc_path| {
+                        let (path, err) = convert_path(db, file_id, cc_path).split();
+                        errs.append(err);
+                        path.map(|ir_path| ir::bindings::Import {
                             mdl: module_id,
-                            path: path.into(),
-                            span: span(db, file_id, path.span()),
+                            path: ir_path,
+                            span: span(db, file_id, cc_path.span()),
                         })
                     })
                     .collect();
@@ -117,7 +122,8 @@ fn headers_with_imports(db: &impl RsImportIr) -> Arc<Outcome<Vec<HeaderInfo>>> {
                     imports,
                 }
             })
-            .collect()
+            .collect();
+        Outcome::from_parts(headers, errs)
     });
     Arc::new(headers)
 }
@@ -274,17 +280,49 @@ fn error(db: &impl SourceFileCache, file_id: FileId, input: syn::Error) -> Diagn
     })
 }
 
-impl From<&CcPath> for ir::bindings::Path {
-    fn from(other: &CcPath) -> Self {
-        other
-            .segments
-            .iter()
-            .map(|segment| {
-                assert!(segment.arguments.is_empty());
-                ir::bindings::PathComponent::from(ir::bindings::Ident::from(
-                    segment.ident.to_string(),
-                ))
-            })
-            .collect()
+fn convert_path(
+    db: &impl SourceFileCache,
+    file_id: FileId,
+    other: &CcPath,
+) -> Outcome<Option<ir::bindings::Path>> {
+    let invalid_arg = |sp| {
+        Outcome::from_err(
+            None,
+            Diagnostic::error(
+                "invalid template argument",
+                span(db, file_id, sp).label("only basic types like `u32` are supported"),
+            ),
+        )
+    };
+    let mut components = vec![];
+    for segment in &other.segments {
+        let mut component_args = vec![];
+        match &segment.arguments {
+            syn::PathArguments::None => (),
+            syn::PathArguments::AngleBracketed(args) => {
+                for arg in args.args.iter() {
+                    match arg {
+                        syn::GenericArgument::Type(syn::Type::Path(p)) => {
+                            if p.qself.is_some() {
+                                return invalid_arg(p.span());
+                            }
+                            let (converted, err) = convert_path(db, file_id, &p.path).split();
+                            if !err.is_empty() {
+                                assert!(converted.is_none());
+                                return Outcome::from_parts(None, err);
+                            }
+                            component_args.push(converted.unwrap());
+                        }
+                        _ => return invalid_arg(arg.span()),
+                    }
+                }
+            }
+            syn::PathArguments::Parenthesized(args) => return invalid_arg(args.span()),
+        }
+        components.push(ir::bindings::PathComponent {
+            name: ir::bindings::Ident::from(segment.ident.to_string()),
+            args: component_args,
+        });
     }
+    Outcome::from_ok(Some(ir::bindings::Path::from(components)))
 }

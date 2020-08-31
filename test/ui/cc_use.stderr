@@ -34,6 +34,24 @@ error: expected `in` or `,`
 7 │ cc_use!("cc_use.h" on "libfoo", B);
   │                    ^^ expected `in` or `,`
 
+error: invalid template argument
+   ┌─ $DIR/cc_use.rs:13:43
+   │
+13 │ cc_use!("cc_use.h" in "libfoo", Templated<'a>);
+   │                                           ^^ only basic types like `u32` are supported
+
+error: invalid template argument
+   ┌─ $DIR/cc_use.rs:14:43
+   │
+14 │ cc_use!("cc_use.h" in "libfoo", Templated<&i32>);
+   │                                           ^^^^ only basic types like `u32` are supported
+
+error: invalid template argument
+   ┌─ $DIR/cc_use.rs:15:43
+   │
+15 │ cc_use!("cc_use.h" in "libfoo", Templated<<Foo as Deref>::Target>);
+   │                                           ^^^^^^^^^^^^^^^^^^^^^^ only basic types like `u32` are supported
+
 error: 'nonexistent.h' file not found
   ┌─ $DIR/cc_use.rs:2:10
   │
@@ -57,6 +75,18 @@ error: item not found: `Bar::E`
   │
 3 │ cc_use!("cc_use.h" in "libfoo", B, Foo::C, Foo::D, Bar::E);
   │                                                    ^^^^^^ this item could not be found
+
+error: item not found: `Templated::<i32>`
+   ┌─ $DIR/cc_use.rs:11:33
+   │
+11 │ cc_use!("cc_use.h" in "libfoo", Templated<::i32>);
+   │                                 ^^^^^^^^^^^^^^^^ this item could not be found
+
+error: item not found: `Templated::<i32>`
+   ┌─ $DIR/cc_use.rs:12:33
+   │
+12 │ cc_use!("cc_use.h" in "libfoo", Templated<i32>);
+   │                                 ^^^^^^^^^^^^^^ this item could not be found
 
 error: item not found: `B`
   ┌─ $DIR/cc_use.rs:8:38

@@ -3,3 +3,6 @@ struct B { char a; };
 namespace Foo {
     struct C { char a; };
 }
+
+template<typename T>
+struct Templated { T inner; };

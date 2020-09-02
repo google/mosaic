@@ -1,4 +1,5 @@
 use crate::{
+    codegen::CodeWriter,
     diagnostics::{
         self,
         db::{FileId, SourceFileCache},
@@ -7,6 +8,7 @@ use crate::{
     ir, libclang,
 };
 use cc_use_common::{CcPath, CcUse};
+use gen_macro::{snippet, write_gen, Snippet};
 use proc_macro2::Span;
 use std::fs::File;
 use std::{
@@ -203,6 +205,7 @@ fn parse_rs_file(
     Outcome::from_parts(macros, errs)
 }
 
+#[rustfmt::skip::macros(write_gen)]
 fn load_cc_module(
     db: &impl SourceFileCache,
     index: &libclang::Index,
@@ -211,18 +214,30 @@ fn load_cc_module(
     module_id: ir::bindings::ModuleId,
 ) -> (libclang::ModuleContext, libclang::ParseErrors) {
     let (ctx, errs) = libclang::parse_with(db, index, module_id, |index| {
-        let line = header.span.as_ref().map(|_| 1).unwrap(); // TODO
-        let src = if header.is_system {
-            // TODO: This line directive doesn't have the intended effect. We can either figure
-            // out a way to use the "presumed location" libclang gives us, or find a way to present
-            // a better error ourselves.
-            format!("#line {}\n#include <{}>", line, header.path)
+        let mut code = Vec::new();
+        let writer = &mut CodeWriter::new(&mut code);
+
+        let path: Snippet = header.path.clone().into();
+        let quoted_path = if header.is_system {
+            snippet!(db, "<$path>")
         } else {
-            format!("#line {}\n#include \"{}\"", line, header.path)
+            snippet!(db, r#""$path""#)
         };
+        // TODO: This line directive doesn't have the intended effect. We can either figure
+        // out a way to use the "presumed location" libclang gives us, or find a way to present
+        // a better error ourselves.
+        let line: Snippet = header.span.as_ref().map(|_| 1).unwrap().to_string().into(); // TODO
+        write_gen!(db, writer, "
+            #line $line
+            #include $quoted_path
+        ")
+        .unwrap();
+
+        let code = std::str::from_utf8(&code).unwrap();
+
         // Use the rust source as the path so it shows up in "not found" errors
         let mut parser = libclang::configure(index.parser(rs_src_path));
-        let unsaved = clang::Unsaved::new(rs_src_path, src);
+        let unsaved = clang::Unsaved::new(rs_src_path, code);
         // unwrap is okay because we know the "file" exists.
         parser.unsaved(&[unsaved]).parse().unwrap()
     });

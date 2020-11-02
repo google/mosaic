@@ -456,6 +456,7 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
         let mut fields = vec![];
         let mut offsets = vec![];
         let mut methods = vec![];
+        let mut align_attr = None;
         let mut errs = Diagnostics::new();
         ent.visit_children(|child, _| {
             match child.get_kind() {
@@ -464,7 +465,9 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
                 }
                 EntityKind::Method => self.lower_method(child, &mut methods, &mut errs),
                 EntityKind::AlignedAttr => {
-                    // Nothing to do, we get the alignment directly from libclang.
+                    // HACK: Instead of parse the attribute, we just use the
+                    // final value given by libclang here.
+                    align_attr = Some((cc::Align::new(align), self.span(child)));
                 }
                 EntityKind::PackedAttr => {
                     errs.add(Diagnostic::error(
@@ -498,11 +501,12 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
                 name: name.clone(),
                 parent,
                 fields,
-                layout: cc::StructLayout {
+                align_attr,
+                layout: Some(cc::StructLayout {
                     field_offsets: offsets,
                     size: cc::Size::new(size),
                     align: cc::Align::new(align),
-                },
+                }),
                 methods,
                 span: self.span(ent),
             });

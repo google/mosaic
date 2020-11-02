@@ -327,6 +327,7 @@ trait Visitor<DB: DefIr + CcSourceIr> {
             parent,
             fields,
             methods,
+            align_attr,
             layout,
             span,
         } = st;
@@ -853,7 +854,12 @@ pub mod cc {
         pub parent: NamespaceId,
         pub fields: Vec<Field>,
         pub methods: Vec<Function>,
-        pub layout: StructLayout,
+        pub align_attr: Option<(Align, Span)>,
+        /// When we can get layout info from libclang we do, but only for
+        /// internal verification.
+        ///
+        /// Layout info is not available for template instantiations.
+        pub layout: Option<StructLayout>,
         pub span: Span,
     }
     impl Struct {
@@ -954,12 +960,16 @@ pub mod cc {
                         .map(|_| ())
                 })
                 .then(|()| fields)
-                .then(|fields| self.check_offsets(db, &fields).map(|_| fields))
-                .map(|fields| rs::Struct {
+                .then(|fields| {
+                    let computed_layout = self.compute_layout(db, &fields);
+                    self.check_offsets(&computed_layout)
+                        .map(|_| (fields, computed_layout))
+                })
+                .map(|(fields, layout)| rs::Struct {
                     name: self.name.clone(),
                     fields,
                     methods: self.methods.iter().cloned().map(rs::Method).collect(),
-                    layout: self.layout.clone(),
+                    layout,
                     vis,
                     repr: rs::Repr::C,
                     span: self.span.clone(),
@@ -967,52 +977,73 @@ pub mod cc {
                 })
         }
 
-        fn check_offsets(&self, db: &impl RsTargetIr, fields: &Vec<rs::Field>) -> Outcome<()> {
+        fn compute_layout(&self, db: &impl RsTargetIr, fields: &Vec<rs::Field>) -> StructLayout {
+            let mut field_offsets = Vec::with_capacity(self.fields.len());
             let mut offset = 0;
-            let mut align = self.layout.align;
-            assert_eq!(self.fields.len(), self.layout.field_offsets.len());
-            for (idx, field) in fields.iter().enumerate() {
+            let mut align = self
+                .align_attr
+                .clone()
+                .map_or(Align::new(1), |(align, _)| align);
+            for field in fields {
+                // TODO: This uses rs types for size/align. We should verify
+                // that they match cc types.
                 let field_ty = field.ty(db);
                 offset = common::align_to(offset, field_ty.align(db));
                 align = std::cmp::max(align, field_ty.align(db));
+                field_offsets.push(offset);
+                offset += field_ty.size(db).0;
+            }
+            let size = Size::new(common::align_to(offset, align));
+            StructLayout {
+                field_offsets,
+                size,
+                align,
+            }
+        }
 
+        fn check_offsets(&self, computed: &StructLayout) -> Outcome<()> {
+            let actual = match &self.layout {
+                Some(l) => l,
+                // libclang couldn't provide us with a layout, so there's nothing to check.
+                None => return ok(()),
+            };
+
+            assert_eq!(self.fields.len(), actual.field_offsets.len());
+            for (idx, &offset) in computed.field_offsets.iter().enumerate() {
                 // Here's where we could add padding, if we wanted to.
-                if offset != self.layout.field_offsets[idx] {
+                if offset != actual.field_offsets[idx] {
                     return err(
                         (),
                         Diagnostic::error(
                             "unexpected field offset",
-                            field
+                            self.fields[idx]
                                 .span
                                 .label("this field was not at the expected offset"),
                         )
                         .with_note(format!(
                             "expected an offset of {}, but the offset is {}",
-                            offset, self.layout.field_offsets[idx]
+                            offset, actual.field_offsets[idx]
                         )),
                     );
                 }
-
-                offset += field_ty.size(db).0;
             }
 
-            let size = common::align_to(offset, align);
-            if size != self.layout.size.0 || align != self.layout.align {
+            if computed.size != actual.size || computed.align != actual.align {
                 let mut diag = Diagnostic::error(
                     "unexpected struct layout",
                     self.span
                         .label("this struct does not have a standard C layout"),
                 );
-                if size != self.layout.size.0 {
+                if computed.size != actual.size {
                     diag = diag.with_note(format!(
                         "expected a size of {}, but the size is {}",
-                        size, self.layout.size.0
+                        computed.size.0, actual.size.0
                     ));
                 }
-                if align != self.layout.align {
+                if computed.align != actual.align {
                     diag = diag.with_note(format!(
                         "expected an alignment of {}, but the alignment is {}",
-                        align, self.layout.align
+                        computed.align, actual.align
                     ));
                 }
                 return err((), diag);

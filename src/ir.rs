@@ -326,10 +326,8 @@ trait Visitor<DB: DefIr + CcSourceIr> {
             name,
             parent,
             fields,
-            offsets,
             methods,
-            size,
-            align,
+            layout,
             span,
         } = st;
         for field in fields {
@@ -496,6 +494,13 @@ mod common {
     }
 
     #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+    pub struct StructLayout {
+        pub field_offsets: Vec<Offset>,
+        pub size: Size,
+        pub align: Align,
+    }
+
+    #[derive(Clone, Debug, Hash, Eq, PartialEq)]
     pub struct TypeRef(libclang::ModuleId, libclang::TypeId);
     impl TypeRef {
         pub(crate) fn new(mdl: libclang::ModuleId, id: libclang::TypeId) -> Self {
@@ -569,7 +574,7 @@ pub mod cc {
     use super::*;
     use crate::libclang::CcSourceIr;
 
-    pub use common::{Align, Ident, Offset, Size, TypeRef};
+    pub use common::{Align, Ident, Offset, Size, StructLayout, TypeRef};
 
     mod bindings {
         use super::*;
@@ -847,10 +852,8 @@ pub mod cc {
         pub name: Ident,
         pub parent: NamespaceId,
         pub fields: Vec<Field>,
-        pub offsets: Vec<Offset>,
         pub methods: Vec<Function>,
-        pub size: Size,
-        pub align: Align,
+        pub layout: StructLayout,
         pub span: Span,
     }
     impl Struct {
@@ -955,12 +958,10 @@ pub mod cc {
                 .map(|fields| rs::Struct {
                     name: self.name.clone(),
                     fields,
-                    offsets: self.offsets.clone(),
                     methods: self.methods.iter().cloned().map(rs::Method).collect(),
+                    layout: self.layout.clone(),
                     vis,
                     repr: rs::Repr::C,
-                    size: self.size,
-                    align: self.align,
                     span: self.span.clone(),
                     cc_id: id,
                 })
@@ -968,15 +969,15 @@ pub mod cc {
 
         fn check_offsets(&self, db: &impl RsTargetIr, fields: &Vec<rs::Field>) -> Outcome<()> {
             let mut offset = 0;
-            let mut align = self.align;
-            assert_eq!(self.fields.len(), self.offsets.len());
+            let mut align = self.layout.align;
+            assert_eq!(self.fields.len(), self.layout.field_offsets.len());
             for (idx, field) in fields.iter().enumerate() {
                 let field_ty = field.ty(db);
                 offset = common::align_to(offset, field_ty.align(db));
                 align = std::cmp::max(align, field_ty.align(db));
 
                 // Here's where we could add padding, if we wanted to.
-                if offset != self.offsets[idx] {
+                if offset != self.layout.field_offsets[idx] {
                     return err(
                         (),
                         Diagnostic::error(
@@ -987,7 +988,7 @@ pub mod cc {
                         )
                         .with_note(format!(
                             "expected an offset of {}, but the offset is {}",
-                            offset, self.offsets[idx]
+                            offset, self.layout.field_offsets[idx]
                         )),
                     );
                 }
@@ -996,22 +997,22 @@ pub mod cc {
             }
 
             let size = common::align_to(offset, align);
-            if size != self.size.0 || align != self.align {
+            if size != self.layout.size.0 || align != self.layout.align {
                 let mut diag = Diagnostic::error(
                     "unexpected struct layout",
                     self.span
                         .label("this struct does not have a standard C layout"),
                 );
-                if size != self.size.0 {
+                if size != self.layout.size.0 {
                     diag = diag.with_note(format!(
                         "expected a size of {}, but the size is {}",
-                        size, self.size.0
+                        size, self.layout.size.0
                     ));
                 }
-                if align != self.align {
+                if align != self.layout.align {
                     diag = diag.with_note(format!(
                         "expected an alignment of {}, but the alignment is {}",
-                        align, self.align
+                        align, self.layout.align
                     ));
                 }
                 return err((), diag);
@@ -1027,7 +1028,7 @@ pub mod rs {
     use super::*;
     use cc::RsTargetIr;
 
-    pub use common::{Align, Ident, Offset, Size, TypeRef};
+    pub use common::{Align, Ident, Offset, Size, StructLayout, TypeRef};
 
     /// Code for bindings targeting Rust.
     mod bindings {
@@ -1206,14 +1207,14 @@ pub mod rs {
                 F32 => 4,
                 F64 => 8,
                 Bool => 1,
-                Struct(id) => return id.lookup(db).size,
+                Struct(id) => return id.lookup(db).layout.size,
             };
             Size::new(sz)
         }
 
         pub fn align(&self, db: &impl RsTargetIr) -> Align {
             match self {
-                Ty::Struct(id) => id.lookup(db).align,
+                Ty::Struct(id) => id.lookup(db).layout.align,
                 // TODO make target dependent. this assumes x86_64
                 _ => Align::new(std::cmp::max(1, self.size(db).0)),
             }
@@ -1272,13 +1273,11 @@ pub mod rs {
     #[derive(Debug, Clone, Eq, PartialEq, Hash)]
     pub struct Struct {
         pub name: Ident,
-        pub fields: Vec<Field>,
-        pub offsets: Vec<Offset>,
-        pub methods: Vec<Method>,
         pub vis: Visibility,
+        pub fields: Vec<Field>,
+        pub methods: Vec<Method>,
+        pub layout: StructLayout,
         pub repr: Repr,
-        pub size: Size,
-        pub align: Align,
         pub span: Span,
         // TODO: We might need a more general way of doing this. (Similar to TypeRef?)
         pub cc_id: cc::StructId,
@@ -1382,7 +1381,7 @@ mod tests {
             st.fields
                 .iter()
                 .map(|f| f.name.as_str())
-                .zip(st.offsets.iter().copied())
+                .zip(st.layout.field_offsets.iter().copied())
                 .collect::<Vec<_>>(),
             vec![("a", 0), ("b", 4), ("c", 8), ("d", 9), ("e", 16), ("f", 24)],
         );
@@ -1403,8 +1402,8 @@ mod tests {
         });
         let db = &sess.db;
         let st = ir.visible_structs(db)[0].lookup(db);
-        assert_eq!(rs::Size::new(4), st.size);
-        assert_eq!(rs::Align::new(4), st.align);
+        assert_eq!(rs::Size::new(4), st.layout.size);
+        assert_eq!(rs::Align::new(4), st.layout.align);
     }
 
     #[test]
@@ -1424,8 +1423,8 @@ mod tests {
         });
         let db = &sess.db;
         let st = ir.visible_structs(db)[0].lookup(db);
-        assert_eq!(rs::Size::new(12), st.size);
-        assert_eq!(rs::Align::new(4), st.align);
+        assert_eq!(rs::Size::new(12), st.layout.size);
+        assert_eq!(rs::Align::new(4), st.layout.align);
     }
 
     #[test]
@@ -1445,7 +1444,7 @@ mod tests {
         });
         let db = &sess.db;
         let st = ir.visible_structs(db)[0].lookup(db);
-        assert_eq!(rs::Size::new(16), st.size);
-        assert_eq!(rs::Align::new(8), st.align);
+        assert_eq!(rs::Size::new(16), st.layout.size);
+        assert_eq!(rs::Align::new(8), st.layout.align);
     }
 }

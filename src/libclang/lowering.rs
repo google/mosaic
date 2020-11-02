@@ -498,10 +498,12 @@ impl<'ctx, 'tu, DB: CcSourceIr> LowerCtx<'ctx, 'tu, DB> {
                 name: name.clone(),
                 parent,
                 fields,
-                offsets,
+                layout: cc::StructLayout {
+                    field_offsets: offsets,
+                    size: cc::Size::new(size),
+                    align: cc::Align::new(align),
+                },
                 methods,
-                size: cc::Size::new(size),
-                align: cc::Align::new(align),
                 span: self.span(ent),
             });
             Some(st)

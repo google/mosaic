@@ -131,7 +131,10 @@ fn gen_struct(
 ) -> io::Result<()> {
     if let Some(rs) = out.rs.as_mut() {
         let rs::Struct {
-            vis, name, align, ..
+            vis,
+            name,
+            layout: rs::StructLayout { align, .. },
+            ..
         } = st;
         write_gen!(db, rs, "
             #[repr(C, align($align))]

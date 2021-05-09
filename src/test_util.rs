@@ -1,14 +1,8 @@
 use crate::{codegen, diagnostics::Outcome, ir, libclang, Session};
 use clang::{self, TranslationUnit, Unsaved};
-use lazy_static::lazy_static;
 use pretty_assertions::assert_eq;
 use std::fmt;
 use std::path::Path;
-use std::sync::Arc;
-
-lazy_static! {
-    pub(crate) static ref CLANG: Arc<clang::Clang> = Arc::new(clang::Clang::new().unwrap());
-}
 
 macro_rules! cpp_parse {
     { $clang:expr, $src:tt } => { $crate::test_util::parse($clang, stringify!($src)) }
@@ -72,7 +66,7 @@ pub(crate) fn parse_and_lower(
 ) -> ir::rs::BindingsCrate {
     assert!(!sess.diags.has_errors()); // TODO has_diags()
 
-    let index = libclang::create_index_with(CLANG.clone());
+    let index = libclang::create_index();
     let module_id = libclang::ModuleId::new(0);
     let (ast, errs) = libclang::parse_with(&sess.db, &index, module_id, |index| parse(index, src));
     use crate::cc_use::RsSource;

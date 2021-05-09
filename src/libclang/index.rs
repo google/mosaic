@@ -191,7 +191,6 @@ fn should_inline(ent: Entity<'_>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util;
 
     fn path(p: &str) -> Path {
         p.split("::")
@@ -202,7 +201,7 @@ mod tests {
 
     #[test]
     fn inline_namespace() {
-        let clang = &test_util::CLANG;
+        let clang = crate::libclang::clang();
         let index = clang::Index::new(&clang, true, true);
         let file = cpp_parse!(&index, {
             namespace std {

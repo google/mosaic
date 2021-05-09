@@ -8,7 +8,8 @@ use crate::{
     diagnostics::{db::SourceFileCache, Outcome},
     ir::{self, cc},
 };
-use clang::{self, source, Clang, Entity, Parser, TranslationUnit, Type};
+use clang::{self, source, Entity, Parser, TranslationUnit, Type};
+use clang_sys::SharedLibrary;
 use core::hash::Hasher;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -20,10 +21,10 @@ pub(crate) use diagnostics::{ParseErrors, SourceFile};
 use ir::DefIr;
 
 pub(crate) fn create_index() -> Index {
-    create_index_with(Arc::new(Clang::new().unwrap()))
+    create_index_with(clang())
 }
 
-pub(crate) fn create_index_with(clang: Arc<Clang>) -> Index {
+fn create_index_with(clang: Arc<clang::Clang>) -> Index {
     Index::new(clang, false, false)
 }
 
@@ -73,6 +74,13 @@ thread_local! {
     static AST_CONTEXT: RefCell<Option<Vec<ModuleContext>>> = RefCell::new(None);
 }
 
+struct AstContextDropGuard;
+impl Drop for AstContextDropGuard {
+    fn drop(&mut self) {
+        AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
+    }
+}
+
 pub(crate) fn set_ast<R>(
     db: &mut crate::Database,
     ctx: Vec<ModuleContext>,
@@ -80,9 +88,9 @@ pub(crate) fn set_ast<R>(
 ) -> R {
     use salsa::Database;
     db.query_mut(AstContextQuery).invalidate(&());
+    let _guard = AstContextDropGuard;
     AST_CONTEXT.with(|cx| *cx.borrow_mut() = Some(ctx));
     let res = f(db);
-    AST_CONTEXT.with(|cx| *cx.borrow_mut() = None);
     res
 }
 
@@ -156,7 +164,7 @@ pub struct Index(Arc<rent::Index>);
 impl Index {
     fn new(clang: Arc<clang::Clang>, exclude: bool, diagnostics: bool) -> Self {
         Index(Arc::new(rent::Index::new(clang, |cl| {
-            clang::Index::new(&*cl, exclude, diagnostics)
+            clang::Index::new(&cl, exclude, diagnostics)
         })))
     }
 
@@ -259,6 +267,34 @@ impl<'tu> Hash for HashType<'tu> {
         Hash::hash(&self.0.get_declaration(), state)
     }
 }
+
+mod lib {
+    use super::*;
+    use lazy_static::lazy_static;
+
+    type ClangWithLib = (Arc<clang::Clang>, Arc<SharedLibrary>);
+
+    lazy_static! {
+        static ref CLANG: ClangWithLib = load();
+    }
+
+    fn load() -> ClangWithLib {
+        clang_sys::load().unwrap();
+        let lib = clang_sys::get_library().unwrap();
+        let clang = clang::Clang::new().unwrap();
+        (Arc::new(clang), lib)
+    }
+
+    pub(crate) fn clang() -> Arc<clang::Clang> {
+        let clang_lib = CLANG.clone();
+        // Ensure that the library is loaded on this thread.
+        if !clang_sys::is_loaded() {
+            clang_sys::set_library(Some(clang_lib.1.clone()));
+        }
+        clang_lib.0
+    }
+}
+pub(crate) use lib::clang;
 
 // All of the clang types have a lifetime parameter, but salsa doesn't support
 // those today. Work around this with some structs that contain an Arc to the

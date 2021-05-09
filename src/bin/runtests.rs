@@ -138,9 +138,9 @@ impl tb::Strategy for RunGenerator {
 
     fn build(&self, test: &tb::Test) -> tb::Result<Command> {
         let mut cmd = if cfg!(windows) {
-            Command::new(self.source_root.join("target\\debug\\peasy.exe"))
+            Command::new(self.source_root.join("target\\debug\\mosaic.exe"))
         } else {
-            Command::new(self.source_root.join("target/debug/peasy"))
+            Command::new(self.source_root.join("target/debug/mosaic"))
         };
         cmd.arg(test.path()).env("TERM", "dumb");
         Ok(cmd)

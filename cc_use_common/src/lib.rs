@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Types and parsing code shared between peasy and the cc_use macro.
+//! Types and parsing code shared between mosaic and the cc_use macro.
 
 use proc_macro2::Span;
 use syn::{

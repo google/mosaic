@@ -299,6 +299,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "mosaic"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "cc_use_common",
+ "clang",
+ "clang-sys",
+ "codespan",
+ "codespan-reporting",
+ "gen_macro",
+ "itertools",
+ "lazy_static",
+ "pretty_assertions",
+ "proc-macro2",
+ "rental",
+ "salsa",
+ "structopt",
+ "syn",
+ "tempfile",
+ "termcolor",
+ "trybuild",
+]
+
+[[package]]
 name = "output_vt100"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -331,30 +355,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "winapi",
-]
-
-[[package]]
-name = "peasy"
-version = "0.1.0"
-dependencies = [
- "cc",
- "cc_use_common",
- "clang",
- "clang-sys",
- "codespan",
- "codespan-reporting",
- "gen_macro",
- "itertools",
- "lazy_static",
- "pretty_assertions",
- "proc-macro2",
- "rental",
- "salsa",
- "structopt",
- "syn",
- "tempfile",
- "termcolor",
- "trybuild",
 ]
 
 [[package]]

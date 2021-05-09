@@ -1,4 +1,4 @@
-# peasy
+# mosaic
 
 A C++ bindings generator for Rust.
 

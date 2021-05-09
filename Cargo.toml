@@ -7,12 +7,12 @@
 # except according to those terms.
 
 [package]
-name = "peasy"
+name = "mosaic"
 version = "0.1.0"
 authors = ["Tyler Mandry <tmandry@gmail.com>"]
 edition = "2018"
 
-default-run = "peasy"
+default-run = "mosaic"
 
 [dependencies]
 cc_use_common = { path = "./cc_use_common" }

@@ -8,7 +8,7 @@
 
 RUSTC   ?= rustc
 TMPDIR  ?= $(shell mktemp -d)
-BINDGEN ?= cargo run --bin=peasy --
+BINDGEN ?= cargo run --bin=mosaic --
 PROC_MACRO_DIR ?= foo
 
 LD_LIB_PATH_ENVVAR ?= LD_LIBRARY_PATH

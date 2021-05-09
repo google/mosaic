@@ -1,0 +1,3 @@
+[build]
+# TODO stop using rental
+rustflags = ["-Aproc_macro_back_compat"]

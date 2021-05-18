@@ -1,55 +1,55 @@
 error: expected literal
-  ┌─ $DIR/cc_use.rs:2:23
-  │
-2 │ cc_use!("cc_use.h" in libfoo, B);
-  │                       ^^^^^^ expected literal
+   ┌─ $DIR/cc_use.rs:10:23
+   │
+10 │ cc_use!("cc_use.h" in libfoo, B);
+   │                       ^^^^^^ expected literal
 
 error: expected `>`
-  ┌─ $DIR/cc_use.rs:4:16
-  │
-4 │ cc_use!(<cc_use.h>, A);
-  │                ^ expected `>`
+   ┌─ $DIR/cc_use.rs:12:16
+   │
+12 │ cc_use!(<cc_use.h>, A);
+   │                ^ expected `>`
 
 error: Try putting system paths inside quotes: "<foo/bar.h>"
-  ┌─ $DIR/cc_use.rs:4:9
-  │
-4 │ cc_use!(<cc_use.h>, A);
-  │         ^ Try putting system paths inside quotes: "<foo/bar.h>"
+   ┌─ $DIR/cc_use.rs:12:9
+   │
+12 │ cc_use!(<cc_use.h>, A);
+   │         ^ Try putting system paths inside quotes: "<foo/bar.h>"
 
 error: expected identifier
-  ┌─ $DIR/cc_use.rs:5:21
-  │
-5 │ cc_use!("cc_use.h", in "libfoo", B);
-  │                     ^^ expected identifier
+   ┌─ $DIR/cc_use.rs:13:21
+   │
+13 │ cc_use!("cc_use.h", in "libfoo", B);
+   │                     ^^ expected identifier
 
 error: expected `in` or `,`
-  ┌─ $DIR/cc_use.rs:6:19
-  │
-6 │ cc_use!("cc_use.h"; B);
-  │                   ^ expected `in` or `,`
+   ┌─ $DIR/cc_use.rs:14:19
+   │
+14 │ cc_use!("cc_use.h"; B);
+   │                   ^ expected `in` or `,`
 
 error: expected `in` or `,`
-  ┌─ $DIR/cc_use.rs:7:20
-  │
-7 │ cc_use!("cc_use.h" on "libfoo", B);
-  │                    ^^ expected `in` or `,`
+   ┌─ $DIR/cc_use.rs:15:20
+   │
+15 │ cc_use!("cc_use.h" on "libfoo", B);
+   │                    ^^ expected `in` or `,`
 
 error: invalid template argument
-   ┌─ $DIR/cc_use.rs:13:43
+   ┌─ $DIR/cc_use.rs:21:43
    │
-13 │ cc_use!("cc_use.h" in "libfoo", Templated<'a>);
+21 │ cc_use!("cc_use.h" in "libfoo", Templated<'a>);
    │                                           ^^ only basic types like `u32` are supported
 
 error: invalid template argument
-   ┌─ $DIR/cc_use.rs:14:43
+   ┌─ $DIR/cc_use.rs:22:43
    │
-14 │ cc_use!("cc_use.h" in "libfoo", Templated<&i32>);
+22 │ cc_use!("cc_use.h" in "libfoo", Templated<&i32>);
    │                                           ^^^^ only basic types like `u32` are supported
 
 error: invalid template argument
-   ┌─ $DIR/cc_use.rs:15:43
+   ┌─ $DIR/cc_use.rs:23:43
    │
-15 │ cc_use!("cc_use.h" in "libfoo", Templated<<Foo as Deref>::Target>);
+23 │ cc_use!("cc_use.h" in "libfoo", Templated<<Foo as Deref>::Target>);
    │                                           ^^^^^^^^^^^^^^^^^^^^^^ only basic types like `u32` are supported
 
 error: 'nonexistent.h' file not found
@@ -59,37 +59,37 @@ error: 'nonexistent.h' file not found
   │          ^^^^^^^^^^^^^^^
 
 error: item not found: `Zed`
-  ┌─ $DIR/cc_use.rs:1:24
+  ┌─ $DIR/cc_use.rs:9:24
   │
-1 │ cc_use!("cc_use.h", A, Zed, B);
+9 │ cc_use!("cc_use.h", A, Zed, B);
   │                        ^^^ this item could not be found
 
 error: item not found: `Foo::D`
-  ┌─ $DIR/cc_use.rs:3:44
-  │
-3 │ cc_use!("cc_use.h" in "libfoo", B, Foo::C, Foo::D, Bar::E);
-  │                                            ^^^^^^ this item could not be found
+   ┌─ $DIR/cc_use.rs:11:44
+   │
+11 │ cc_use!("cc_use.h" in "libfoo", B, Foo::C, Foo::D, Bar::E);
+   │                                            ^^^^^^ this item could not be found
 
 error: item not found: `Bar::E`
-  ┌─ $DIR/cc_use.rs:3:52
-  │
-3 │ cc_use!("cc_use.h" in "libfoo", B, Foo::C, Foo::D, Bar::E);
-  │                                                    ^^^^^^ this item could not be found
+   ┌─ $DIR/cc_use.rs:11:52
+   │
+11 │ cc_use!("cc_use.h" in "libfoo", B, Foo::C, Foo::D, Bar::E);
+   │                                                    ^^^^^^ this item could not be found
 
 error: item not found: `Templated::<i32>`
-   ┌─ $DIR/cc_use.rs:11:33
+   ┌─ $DIR/cc_use.rs:19:33
    │
-11 │ cc_use!("cc_use.h" in "libfoo", Templated<::i32>);
+19 │ cc_use!("cc_use.h" in "libfoo", Templated<::i32>);
    │                                 ^^^^^^^^^^^^^^^^ this item could not be found
 
 error: item not found: `Templated::<i32>`
-   ┌─ $DIR/cc_use.rs:12:33
+   ┌─ $DIR/cc_use.rs:20:33
    │
-12 │ cc_use!("cc_use.h" in "libfoo", Templated<i32>);
+20 │ cc_use!("cc_use.h" in "libfoo", Templated<i32>);
    │                                 ^^^^^^^^^^^^^^ this item could not be found
 
 error: item not found: `B`
-  ┌─ $DIR/cc_use.rs:8:38
-  │
-8 │ cc_use!("nonexistent.h" in "libfoo", B);
-  │                                      ^ this item could not be found
+   ┌─ $DIR/cc_use.rs:16:38
+   │
+16 │ cc_use!("nonexistent.h" in "libfoo", B);
+   │                                      ^ this item could not be found

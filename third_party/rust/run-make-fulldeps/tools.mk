@@ -1,3 +1,11 @@
+# Copyright (c) 2021 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+# https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+# <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+# option. This file may not be copied, modified, or distributed
+# except according to those terms.
+
 # These deliberately use `=` and not `:=` so that client makefiles can
 # augment HOST_RPATH_DIR / TARGET_RPATH_DIR.
 HOST_RPATH_ENV = \
